@@ -331,6 +331,8 @@ What would you like to investigate?`,
                 setInput(prev => prev + (prev.trim() ? '\n' : '') + `[Attached: ${file.name}] `);
             }
         }
+        // Reset so the same file can be selected again
+        if (fileRef.current) fileRef.current.value = '';
     };
 
     const adjustInputHeight = () => {
@@ -593,7 +595,11 @@ What would you like to investigate?`,
                     }}>
                         <FontAwesomeIcon icon={faPaperclip} />
                         <span>Attached: <strong>{fileStatus.name}</strong></span>
-                        <button style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px' }} onClick={() => setFileStatus(null)}>×</button>
+                        <button style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px' }} onClick={() => {
+                            setFileStatus(null);
+                            setFileContent(null);
+                            if (fileRef.current) fileRef.current.value = '';
+                        }}>×</button>
                     </div>
                 )}
                 <div className="chat-input-row">
@@ -609,6 +615,7 @@ What would you like to investigate?`,
                         type="file"
                         ref={fileRef}
                         style={{ display: 'none' }}
+                        accept=".pdf,.txt,.log,.kql,.json,.csv,.yaml,.yml,.md"
                         onChange={handleFileChange}
                     />
                     <textarea
