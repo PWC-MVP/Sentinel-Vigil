@@ -1,0 +1,49 @@
+# Version control
+.git
+.gitignore
+
+# Python environments and caches
+.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+
+# Node dependencies (rebuilt in Docker stage)
+frontend/node_modules
+
+# Pre-existing dist (rebuilt in Docker stage)
+frontend/dist
+
+# Secrets and local config (injected via Container App env vars)
+.env
+config.json
+
+# Generated output (runtime-writable dirs)
+reports/
+tmp/
+temp/
+images/
+
+# Root-level scripts and artefacts not needed in image
+
+start.ps1
+startup.md
+IMPLEMENTATION_PLAN.md
+README.md
+requirements.txt
+requirements.lock
+config.json.template
+.env.template
+
+# Data / query files not needed in image
+queries/
+generate_report_from_json.json
+package-lock.json
+
+# Dev tooling
+=12.19.0
+mcp-apps/
+docs/
+.vscode/
+.github/

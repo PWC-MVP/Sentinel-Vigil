@@ -82,6 +82,8 @@ def enrich_single_ip(ip: str, config: dict) -> dict:
         'shodan_hostnames': [],   # Reverse DNS hostnames
         'shodan_cpes': [],        # Common Platform Enumeration identifiers
         'shodan_last_update': None,  # When Shodan last scanned this IP
+        'threat_detected': False,
+        'threat_description': None,
     }
     
     # 1. IPInfo.io enrichment
@@ -251,6 +253,31 @@ def enrich_single_ip(ip: str, config: dict) -> dict:
         except Exception as e:
             print(f"  [Shodan InternetDB] Error for {ip}: {str(e)}", file=sys.stderr)
     
+    # 6. Final Threat Assessment
+    threats = []
+    if result['is_tor'] or result['vpnapi_security_tor']:
+        threats.append("Tor Exit Node")
+    if result['abuse_confidence_score'] > 75:
+        threats.append(f"High Abuse Score ({result['abuse_confidence_score']}%)")
+    elif result['abuse_confidence_score'] > 25:
+        # Not necessarily "threat detected" on its own, but we'll note it
+        pass
+        
+    shodan_tags = result.get('shodan_tags', [])
+    if 'c2' in shodan_tags:
+        threats.append("Known C2 Server (Shodan)")
+    if 'malware' in shodan_tags:
+        threats.append("Malware Host (Shodan)")
+    if result.get('shodan_vulns'):
+        # Just having vulns isn't "threat detected" (compromised), but it's risky.
+        # We won't mark as threat_detected just for vulns unless they are critical?
+        # For now, let's keep it simple.
+        pass
+
+    if threats:
+        result['threat_detected'] = True
+        result['threat_description'] = "; ".join(threats)
+
     return result
 
 

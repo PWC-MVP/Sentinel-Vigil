@@ -1,0 +1,69 @@
+name: Build and Deploy to sentinel-vigil
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CONTAINER_APP: sentinel-vigil
+  RESOURCE_GROUP: Infosec-Infra
+  IMAGE_NAME: sentinel-vigil
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # needed for OIDC login (optional, see note below)
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Azure login ──────────────────────────────────────────────────────────
+      # Requires GitHub secret AZURE_CREDENTIALS (service principal JSON).
+      # To create: az ad sp create-for-rbac --name "sentinel-vigil-deploy"
+      #   --role contributor --scopes /subscriptions/<SUB_ID>/resourceGroups/Infosec-Infra
+      #   --sdk-auth
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # ── Build & push to ACR ──────────────────────────────────────────────────
+      # Requires GitHub secrets:
+      #   ACR_LOGIN_SERVER  — e.g. myregistry.azurecr.io
+      #   ACR_USERNAME      — ACR admin username  (or use managed identity)
+      #   ACR_PASSWORD      — ACR admin password
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+
+      # ── Deploy new revision to Container Apps ────────────────────────────────
+      - name: Deploy to Azure Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Show application URL
+        run: |
+          az containerapp show \
+            --name ${{ env.CONTAINER_APP }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv

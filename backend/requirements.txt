@@ -1,0 +1,34 @@
+# Security Investigator — Backend Requirements
+# Install with: pip install -r backend/requirements.txt
+
+# Core API framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# Azure SDKs
+azure-identity>=1.19.0           # DefaultAzureCredential (picks up az login)
+azure-monitor-query>=1.4.0       # Sentinel / Log Analytics KQL execution
+
+# HTTP client (for Graph API, IP enrichment)
+httpx>=0.27.0
+
+# Data validation
+pydantic>=2.7.0
+
+# Config loading
+python-dotenv>=1.0.0
+
+# Existing project dependencies (from root requirements.txt)
+requests>=2.28.0
+python-dateutil>=2.9.0
+pytz>=2023.3
+
+# Backup / Key Vault
+azure-storage-blob>=12.19.0
+azure-keyvault-secrets>=4.7.0
+
+# Static file serving (required by FastAPI StaticFiles for SPA)
+aiofiles>=23.0.0
+
+# Form / file upload support (required by chat.py file upload endpoint)
+python-multipart>=0.0.9

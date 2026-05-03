@@ -54,3 +54,11 @@ Thumbs.db
 # MCP Apps - ignore build artifacts and dependencies
 mcp-apps/**/node_modules/
 mcp-apps/**/dist/
+
+# Container app runtime artifacts
+tmp/
+=12.19.0
+
+# Node version manager artifacts
+node_modules/
+frontend/node_modules/
