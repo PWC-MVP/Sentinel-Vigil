@@ -32,3 +32,6 @@ aiofiles>=23.0.0
 
 # Form / file upload support (required by chat.py file upload endpoint)
 python-multipart>=0.0.9
+
+# PDF parsing (required by chat.py /upload endpoint)
+pypdf>=4.0.0
