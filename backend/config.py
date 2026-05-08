@@ -73,6 +73,21 @@ class Config:
     # ── Settings page access password ───────────────────────────
     SETTINGS_PASSWORD: str = os.getenv("SETTINGS_PASSWORD", "changeme")
 
+    # ── Email via Microsoft Graph API ────────────────────────────
+    # Requires Mail.Send application permission on the app registration.
+    # GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET default to the Azure service-principal
+    # credentials already configured above — set overrides only when a dedicated
+    # mail app registration is used.
+    GRAPH_MAIL_FROM: str = os.getenv("GRAPH_MAIL_FROM", "")
+    GRAPH_CLIENT_ID: str = os.getenv("GRAPH_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID", "")
+    GRAPH_CLIENT_SECRET: str = os.getenv("GRAPH_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET", "")
+
+    # ── Sentinel comment webhook (Logic App) ─────────────────────
+    SENTINEL_COMMENT_WEBHOOK_URL: str = os.getenv("SENTINEL_COMMENT_WEBHOOK_URL", "")
+
+    # ── VirusTotal ────────────────────────────────────────────────
+    VIRUSTOTAL_API_KEY: str = os.getenv("VIRUSTOTAL_API_KEY", "")
+
     @classmethod
     def reload(cls) -> None:
         """Reload all values from .env and config.json without restarting."""
@@ -99,6 +114,12 @@ class Config:
         cls.LABEL_MAPPING = {k: v for k, v in raw.get("label_mapping", {}).items() if not k.startswith("__")}
 
         cls.SETTINGS_PASSWORD = os.getenv("SETTINGS_PASSWORD", "changeme")
+
+        cls.GRAPH_MAIL_FROM = os.getenv("GRAPH_MAIL_FROM", "")
+        cls.GRAPH_CLIENT_ID = os.getenv("GRAPH_CLIENT_ID") or os.getenv("AZURE_CLIENT_ID", "")
+        cls.GRAPH_CLIENT_SECRET = os.getenv("GRAPH_CLIENT_SECRET") or os.getenv("AZURE_CLIENT_SECRET", "")
+        cls.SENTINEL_COMMENT_WEBHOOK_URL = os.getenv("SENTINEL_COMMENT_WEBHOOK_URL", "")
+        cls.VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY", "")
 
         _extra = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
         cls.CORS_ORIGINS = _extra or [

@@ -1,9 +1,12 @@
 from collections import defaultdict
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from backend.services.sentinel import run_kql
 from backend.services import llm as llm_service
 import logging
+import json as _json_g
+import re as _re_g
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/incident-analytics", tags=["incident-analytics"])
@@ -19,8 +22,18 @@ class LlmAssessmentRequest(BaseModel):
     recurrence: list[dict] = []
 
 
+class EmailReportRequest(BaseModel):
+    days: int = 30
+    to: list[str] = []
+    app_url: str = ""
+    include_enrichment: bool = True
+    include_llm: bool = True
+    incident_numbers: list[int] = []  # empty = all active
+    max_incidents: int = 200
+
+
 @router.get("/mttr")
-async def get_mttr(days: int = Query(30)):
+async def get_mttr(days: float = Query(30)):
     """Mean / median / P90 / P95 time-to-resolve metrics, overall and by severity."""
     overall_q = f"""
     SecurityIncident
@@ -85,7 +98,7 @@ async def get_mttr(days: int = Query(30)):
 
 
 @router.get("/trends")
-async def get_incident_trends(days: int = Query(30)):
+async def get_incident_trends(days: float = Query(30)):
     """Daily incident creation counts by severity."""
     q = f"""
     SecurityIncident
@@ -110,7 +123,7 @@ async def get_incident_trends(days: int = Query(30)):
 
 
 @router.get("/owners")
-async def get_incident_owners(days: int = Query(30)):
+async def get_incident_owners(days: float = Query(30)):
     """Incident distribution by assigned owner."""
     q = f"""
     SecurityIncident
@@ -153,7 +166,7 @@ async def get_incident_owners(days: int = Query(30)):
 
 
 @router.get("/sla")
-async def get_sla_compliance(days: int = Query(30)):
+async def get_sla_compliance(days: float = Query(30)):
     """SLA compliance per severity tier (High=4h, Medium=8h, Low=24h, Info=72h)."""
     q = f"""
     SecurityIncident
@@ -199,7 +212,7 @@ async def get_sla_compliance(days: int = Query(30)):
 
 
 @router.get("/summary")
-async def get_incident_summary(days: int = Query(30)):
+async def get_incident_summary(days: float = Query(30)):
     """Quick counts for the stat tile row."""
     q = f"""
     SecurityIncident
@@ -229,7 +242,7 @@ async def get_incident_summary(days: int = Query(30)):
 
 
 @router.get("/incidents")
-async def get_incidents(days: int = Query(30)):
+async def get_incidents(days: float = Query(30)):
     """Full incident list with all details, limit 300, sorted newest first."""
     # column_ifexists guards against workspaces that don't carry every optional
     # field.  Tactics is left as raw dynamic — Python normalises it below.
@@ -317,7 +330,7 @@ async def get_incidents(days: int = Query(30)):
 
 
 @router.get("/recurrence")
-async def get_recurrence(days: int = Query(30)):
+async def get_recurrence(days: float = Query(30)):
     """Incidents that repeat with the same title — possible detection signal fatigue."""
     q = f"""
     SecurityIncident
@@ -871,9 +884,188 @@ async def _enrich_entity_list(entities: list) -> list:
     return result
 
 
+def _kql_escape(s: str) -> str:
+    """Escape a string for safe embedding inside a KQL double-quoted string literal."""
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+async def _collect_investigation_data(entities: list, incident_number: int, days: int = 7) -> list[dict]:
+    """
+    Run entity-specific KQL investigation queries and return structured results.
+    Each entry: {label, query_type, rows, row_count}. Failed/empty queries are silently skipped.
+    """
+    import asyncio as _asyncio
+
+    coros: list = []
+    labels: list[str] = []
+    qtypes: list[str] = []
+    seen_accounts: set = set()
+    seen_ips: set = set()
+    seen_hosts: set = set()
+
+    for e in entities[:8]:
+        etype = str(e.get("type", "")).lower()
+
+        if etype == "account":
+            identifier = (e.get("UPN") or e.get("Name", "")).strip()
+            if not identifier or identifier in seen_accounts:
+                continue
+            seen_accounts.add(identifier)
+            esc = _kql_escape(identifier)
+
+            coros.append(run_kql(f"""
+SigninLogs
+| where TimeGenerated > ago({days}d)
+| where UserPrincipalName =~ "{esc}" or UserDisplayName =~ "{esc}"
+| project TimeGenerated, User=UserPrincipalName, App=AppDisplayName, IP=IPAddress,
+    Location=tostring(LocationDetails), ResultType,
+    Risk=tostring(column_ifexists('RiskLevelDuringSignIn', '')),
+    CA=tostring(column_ifexists('ConditionalAccessStatus', ''))
+| order by TimeGenerated desc
+| limit 20
+""", days=days + 1))
+            labels.append(f"Sign-in Logs: {identifier}")
+            qtypes.append("signin")
+
+            coros.append(run_kql(f"""
+AuditLogs
+| where TimeGenerated > ago({days}d)
+| where tostring(InitiatedBy) contains "{esc}" or tostring(TargetResources) contains "{esc}"
+| project TimeGenerated, OperationName, Result, Category,
+    InitiatedBy=substring(tostring(InitiatedBy), 0, 200),
+    Target=substring(tostring(TargetResources), 0, 200)
+| order by TimeGenerated desc
+| limit 15
+""", days=days + 1))
+            labels.append(f"Azure AD Audit: {identifier}")
+            qtypes.append("audit")
+
+        elif etype == "ip":
+            addr = (e.get("Address", "") or "").strip()
+            if not addr or addr in seen_ips:
+                continue
+            seen_ips.add(addr)
+            esc = _kql_escape(addr)
+
+            coros.append(run_kql(f"""
+CommonSecurityLog
+| where TimeGenerated > ago({days}d)
+| where SourceIP =~ "{esc}" or DestinationIP =~ "{esc}"
+| project TimeGenerated, DeviceVendor, Activity, SourceIP, DestinationIP, DestinationPort, Protocol, Message=substring(Message,0,300)
+| order by TimeGenerated desc
+| limit 20
+""", days=days + 1))
+            labels.append(f"Network Logs (CSL): {addr}")
+            qtypes.append("network")
+
+            coros.append(run_kql(f"""
+SigninLogs
+| where TimeGenerated > ago({days}d)
+| where IPAddress =~ "{esc}"
+| project TimeGenerated, User=UserPrincipalName, App=AppDisplayName, ResultType,
+    Risk=tostring(column_ifexists('RiskLevelDuringSignIn', '')), Location=tostring(LocationDetails)
+| order by TimeGenerated desc
+| limit 15
+""", days=days + 1))
+            labels.append(f"Sign-ins from IP: {addr}")
+            qtypes.append("signin")
+
+        elif etype == "host":
+            hostname = (e.get("Hostname") or e.get("FQDN") or "").strip()
+            if not hostname or hostname in seen_hosts:
+                continue
+            seen_hosts.add(hostname)
+            esc = _kql_escape(hostname)
+
+            coros.append(run_kql(f"""
+SecurityEvent
+| where TimeGenerated > ago({days}d)
+| where Computer contains "{esc}"
+| where EventID in (4624, 4625, 4648, 4688, 4720, 4732, 4756, 7045)
+| project TimeGenerated, Computer, EventID, Activity, Account,
+    LogonType=tostring(column_ifexists('LogonType', '')),
+    ProcessName=tostring(column_ifexists('NewProcessName', '')),
+    CommandLine=substring(tostring(column_ifexists('CommandLine', '')), 0, 300),
+    IpAddress=tostring(column_ifexists('IpAddress', ''))
+| order by TimeGenerated desc
+| limit 25
+""", days=days + 1))
+            labels.append(f"Security Events: {hostname}")
+            qtypes.append("host")
+
+            coros.append(run_kql(f"""
+DeviceProcessEvents
+| where TimeGenerated > ago({days}d)
+| where DeviceName contains "{esc}"
+| project TimeGenerated, DeviceName, AccountName, FileName, ProcessCommandLine=substring(ProcessCommandLine,0,300),
+    InitiatingProcessFileName, InitiatingProcessCommandLine=substring(InitiatingProcessCommandLine,0,200)
+| order by TimeGenerated desc
+| limit 20
+""", days=days + 1))
+            labels.append(f"Process Events: {hostname}")
+            qtypes.append("process")
+
+    # Related alerts for this incident (always run)
+    coros.append(run_kql(f"""
+SecurityAlert
+| where TimeGenerated > ago({days + 90}d)
+| where SystemAlertId in (
+    SecurityIncident
+    | where IncidentNumber == {incident_number}
+    | mv-expand todynamic(AlertIds)
+    | project tostring(AlertIds)
+)
+| project TimeGenerated, AlertName, Severity,
+    Description=substring(Description, 0, 400),
+    Tactics, Techniques,
+    Entities=substring(tostring(Entities), 0, 400)
+| order by TimeGenerated desc
+| limit 10
+""", days=days + 91))
+    labels.append("Related Security Alerts")
+    qtypes.append("alerts")
+
+    results = await _asyncio.gather(*coros, return_exceptions=True)
+
+    sections: list[dict] = []
+    for label, qtype, result in zip(labels, qtypes, results):
+        if isinstance(result, Exception):
+            logger.debug("Investigation query [%s] skipped: %s", label, result)
+            continue
+        rows = result.get("rows", []) if isinstance(result, dict) else []
+        if rows:
+            sections.append({"label": label, "query_type": qtype, "rows": rows, "row_count": len(rows)})
+
+    return sections
+
+
+async def _run_investigation_queries(entities: list, incident_number: int, days: int = 7) -> str:
+    """Format investigation data as a markdown section for LLM prompt context."""
+    sections = await _collect_investigation_data(entities, incident_number, days)
+    if not sections:
+        return ""
+    parts: list[str] = []
+    for section in sections:
+        lines = [f"### {section['label']} ({section['row_count']} records)"]
+        for row in section["rows"]:
+            cells = []
+            for k, v in row.items():
+                if v is None or v == "":
+                    continue
+                sv = str(v)
+                if len(sv) > 250:
+                    sv = sv[:250] + "…"
+                cells.append(f"{k}: {sv}")
+            lines.append("- " + " | ".join(cells))
+        parts.append("\n".join(lines))
+    return "\n\n## KQL Investigation Results\n\n" + "\n\n".join(parts)
+
+
 @router.post("/analyze-incident")
 async def analyze_single_incident(payload: dict):
     """Analyze a single incident with LLM and return targeted recommendations."""
+    import asyncio as _asyncio
+
     inc = payload.get("incident", {})
     raw_entities: list = payload.get("entities", [])
 
@@ -891,7 +1083,10 @@ async def analyze_single_incident(payload: dict):
         "5. Detection rule tuning suggestions if this may be recurring noise or a false positive\n"
         "6. If entity enrichment data is provided, explicitly reference it in your analysis — "
         "call out any malicious IPs (high abuse scores, VPN/Tor/proxy flags, CVEs), "
-        "confirmed threat-intel matches for domains or file hashes, and how these affect the risk assessment.\n\n"
+        "confirmed threat-intel matches for domains or file hashes, and how these affect the risk assessment.\n"
+        "7. KQL investigation results are live workspace evidence — use them as primary source data: "
+        "reference specific sign-in failures, process executions, network connections, and alert details "
+        "to reconstruct the attack timeline and raise or lower your confidence in the threat assessment.\n\n"
         "Use markdown formatting with clear headings. Always include a summary table. "
         "Be direct, evidence-based, and actionable."
     )
@@ -899,8 +1094,12 @@ async def analyze_single_incident(payload: dict):
     closed_str = inc.get("closed", "") or "Not yet closed"
     mttr = inc.get("mttr_hours", 0) or 0
 
-    # Run entity enrichment in parallel with prompt assembly
-    enrichment_section = await _enrich_entities(raw_entities)
+    # Run enrichment and KQL investigation in parallel
+    enrichment_section, investigation_section = await _asyncio.gather(
+        _enrich_entities(raw_entities),
+        _run_investigation_queries(raw_entities, inc.get("number", 0)),
+        return_exceptions=False,
+    )
 
     user_msg = (
         f"Analyze the following Microsoft Sentinel security incident:\n\n"
@@ -918,6 +1117,7 @@ async def analyze_single_incident(payload: dict):
         f"- **Classification Comment**: {inc.get('classification_comment', '') or 'None'}\n\n"
         f"## Description\n"
         f"{inc.get('description', 'No description provided.') or 'No description provided.'}"
+        f"{investigation_section}"
         f"{enrichment_section}\n\n"
         "Provide a thorough analysis with actionable recommendations."
     )
@@ -928,6 +1128,24 @@ async def analyze_single_incident(payload: dict):
     except Exception as e:
         logger.error("Per-incident analysis failed: %s", e)
         raise HTTPException(status_code=500, detail=f"LLM analysis failed: {str(e)}")
+
+
+@router.post("/incidents/{incident_number}/investigate")
+async def investigate_incident(incident_number: int, payload: dict):
+    """Run KQL investigation queries and return structured results for frontend display."""
+    entities = payload.get("entities", [])
+    days = max(1, min(int(payload.get("days", 7)), 90))
+    try:
+        sections = await _collect_investigation_data(entities, incident_number, days)
+        return {
+            "sections": sections,
+            "total_records": sum(s["row_count"] for s in sections),
+            "incident_number": incident_number,
+            "days": days,
+        }
+    except Exception as e:
+        logger.error("Investigation failed for #%s: %s", incident_number, e)
+        raise HTTPException(status_code=500, detail=f"Investigation failed: {str(e)}")
 
 
 @router.get("/incidents/{incident_number}/debug")
@@ -1594,3 +1812,1025 @@ async def get_incident_details(incident_number: int):
     except Exception as e:
         logger.error("Incident details fetch failed: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch incident details: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Priority Ranking, Email Reports, Enrichment Comments
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/priority-ranking")
+async def rank_incidents_by_priority(payload: dict):
+    """LLM-assigns priority 1–5 to each incident and returns sorted list."""
+    incidents = payload.get("incidents", [])[:60]
+    if not incidents:
+        return {"ranked": []}
+
+    lines = [
+        f"#{inc.get('number','?')} | Sev:{inc.get('severity','?')} | "
+        f"Status:{inc.get('status','?')} | MTTR:{float(inc.get('mttr_hours') or 0):.0f}h | "
+        f"Tactics:{inc.get('tactics') or 'None'} | Title:{inc.get('title','?')}"
+        for inc in incidents
+    ]
+
+    system = (
+        "You are ARIA, an elite Tier-3 Cyber Security Analyst.\n"
+        "Analyze these Microsoft Sentinel incidents and assign each a priority score 1–5:\n"
+        "  5 = Critical: Active attack, credential theft, lateral movement, data exfiltration\n"
+        "  4 = High: Privilege escalation, persistence, suspicious auth, C2 indicators\n"
+        "  3 = Medium: Anomalous behavior, policy violations, moderate-confidence detections\n"
+        "  2 = Low: Low-confidence alerts, borderline informational, likely false positive\n"
+        "  1 = Minimal: Noise, benign patterns, already closed with no escalation needed\n\n"
+        "Respond ONLY with a valid JSON array — no other text:\n"
+        '[{"number": 123, "priority": 5, "reason": "One concise sentence."}]'
+    )
+    user_msg = "Assign priority to these Sentinel incidents:\n\n" + "\n".join(lines)
+
+    try:
+        result = await llm_service.complete(system, user_msg)
+        text = result["text"].strip()
+        m = _re_g.search(r'\[.*\]', text, _re_g.DOTALL)
+        ranked_raw = _json_g.loads(m.group(0)) if m else _json_g.loads(text)
+        priority_map = {
+            int(r["number"]): r
+            for r in ranked_raw
+            if isinstance(r, dict) and "number" in r
+        }
+        result_list = []
+        for inc in incidents:
+            try:
+                num = int(inc.get("number") or 0)
+            except (TypeError, ValueError):
+                num = 0
+            p = priority_map.get(num, {})
+            result_list.append({
+                **inc,
+                "priority_score": int(p.get("priority", 3)),
+                "priority_reason": str(p.get("reason", "")),
+            })
+        result_list.sort(key=lambda x: (-x["priority_score"], -(float(x.get("mttr_hours") or 0))))
+        return {"ranked": result_list}
+    except Exception as e:
+        logger.error("Priority ranking failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Priority ranking failed: {e}")
+
+
+def _priority_label(score: int) -> tuple[str, str]:
+    """(display_label, hex_color) for priority 1–5."""
+    return {
+        5: ("P5 — Critical", "#C0392B"),
+        4: ("P4 — High",     "#E67E22"),
+        3: ("P3 — Medium",   "#F39C12"),
+        2: ("P2 — Low",      "#27AE60"),
+        1: ("P1 — Minimal",  "#7F8C8D"),
+    }.get(score, ("P3 — Medium", "#F39C12"))
+
+
+def _sev_color_email(sev: str) -> str:
+    return {"High": "#C0392B", "Medium": "#E67E22", "Low": "#27AE60"}.get(sev, "#3498DB")
+
+
+def _build_incident_email_html(
+    incidents: list,
+    summary: dict,
+    days: int,
+    app_url: str,
+    generated_at: str,
+    briefs: dict,
+) -> str:
+    """Assemble the full decorated HTML email body for an incident priority report."""
+    from collections import defaultdict as _dd
+
+    brand   = "#D04A02"
+    dark_bg = "#1A1E2E"
+    card_bg = "#FFFFFF"
+    border  = "#E5E7EB"
+    t_pri   = "#1F2937"
+    t_mut   = "#6B7280"
+
+    def sev_badge(sev: str) -> str:
+        c = _sev_color_email(sev)
+        return (f'<span style="background:{c}22;color:{c};font-size:11px;font-weight:700;'
+                f'padding:2px 10px;border-radius:20px">{sev}</span>')
+
+    def status_badge(status: str) -> str:
+        c = "#27AE60" if status == "Closed" else "#C0392B"
+        return (f'<span style="background:{c}22;color:{c};font-size:11px;font-weight:700;'
+                f'padding:2px 10px;border-radius:20px">{status}</span>')
+
+    def btn(text: str, url: str, bg: str, fg: str = "#FFFFFF") -> str:
+        return (f'<a href="{url}" style="display:inline-block;padding:7px 16px;background:{bg};'
+                f'color:{fg};text-decoration:none;border-radius:6px;font-size:12px;font-weight:700;'
+                f'margin-right:8px;margin-bottom:6px;white-space:nowrap">{text}</a>')
+
+    groups: dict = _dd(list)
+    for inc in incidents:
+        groups[inc.get("priority_score", 3)].append(inc)
+
+    sections_html = ""
+    for score in sorted(groups.keys(), reverse=True):
+        plabel, pcolor = _priority_label(score)
+        cards = ""
+        for inc in groups[score]:
+            num     = inc.get("number", "?")
+            title   = inc.get("title", "Unknown")
+            sev     = inc.get("severity", "Unknown")
+            status  = inc.get("status", "Unknown")
+            owner   = inc.get("owner", "Unassigned")
+            created = str(inc.get("created") or "")[:16].replace("T", " ")
+            tactics = inc.get("tactics") or ""
+            mttr    = float(inc.get("mttr_hours") or 0)
+            reason  = inc.get("priority_reason", "")
+            try:
+                brief_key = int(num)
+            except (TypeError, ValueError):
+                brief_key = str(num)
+            brief_text = briefs.get(brief_key) or briefs.get(str(num), "")
+
+            mttr_c  = "#C0392B" if mttr > 24 else "#E67E22" if mttr > 8 else "#27AE60"
+            mttr_s  = f"{mttr:.1f}h" if mttr < 48 else f"{mttr/24:.1f}d"
+
+            tactic_tags = "".join(
+                f'<span style="background:#FEF3C7;color:#92400E;font-size:10px;font-weight:700;'
+                f'padding:2px 8px;border-radius:12px;margin-right:4px">{t.strip()}</span>'
+                for t in tactics.split(",") if t.strip()
+            )
+
+            # Enrichment table (only for top-ranked incidents that have _enrichment_summary)
+            enr_rows = ""
+            for e in inc.get("_enrichment_summary", [])[:6]:
+                mal   = e.get("vt_malicious", 0)
+                vtot  = e.get("vt_total", 0)
+                abuse = e.get("abuse_score", 0)
+                vc    = "#C0392B" if mal > 0 else "#27AE60"
+                ac    = "#C0392B" if abuse > 50 else "#E67E22" if abuse > 20 else "#27AE60"
+                enr_rows += (
+                    f'<tr><td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;font-family:monospace">{e.get("value","")}</td>'
+                    f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px">{e.get("type","").upper()}</td>'
+                    f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;color:{vc};font-weight:600">{mal}/{vtot} malicious</td>'
+                    f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;color:{ac};font-weight:600">{abuse}/100</td></tr>'
+                )
+            enr_section = ""
+            if enr_rows:
+                enr_section = (
+                    f'<div style="margin-top:12px">'
+                    f'<div style="font-size:10px;font-weight:700;color:{t_mut};text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Threat Intelligence (VT + AbuseIPDB)</div>'
+                    f'<table style="border-collapse:collapse;width:100%;border:1px solid {border};border-radius:6px">'
+                    f'<thead><tr style="background:#F9FAFB">'
+                    f'<th style="padding:6px 10px;text-align:left;font-size:10px;color:{t_mut};font-weight:700;text-transform:uppercase">Indicator</th>'
+                    f'<th style="padding:6px 10px;text-align:left;font-size:10px;color:{t_mut};font-weight:700;text-transform:uppercase">Type</th>'
+                    f'<th style="padding:6px 10px;text-align:left;font-size:10px;color:{t_mut};font-weight:700;text-transform:uppercase">VirusTotal</th>'
+                    f'<th style="padding:6px 10px;text-align:left;font-size:10px;color:{t_mut};font-weight:700;text-transform:uppercase">AbuseIPDB</th>'
+                    f'</tr></thead><tbody>{enr_rows}</tbody></table></div>'
+                )
+
+            view_url    = f"{app_url}?page=incidents" if app_url else "#"
+            comment_url = f"{app_url}/api/incident-analytics/incidents/{num}/comment-form"
+            enrich_url  = f"{app_url}/api/incident-analytics/incidents/{num}/enrich-comment-confirm"
+
+            cards += f"""
+<div style="background:{card_bg};border:1px solid {border};border-left:4px solid {pcolor};border-radius:8px;margin-bottom:14px">
+  <div style="padding:14px 18px;background:#FAFAFA;border-bottom:1px solid {border}">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <span style="font-size:12px;color:{t_mut}">#{num}</span>
+      {sev_badge(sev)} {status_badge(status)}
+      <span style="margin-left:auto;font-size:11px;font-weight:700;color:{mttr_c}">MTTR: {mttr_s}</span>
+    </div>
+    <div style="font-size:14px;font-weight:700;color:{t_pri};line-height:1.4">{title}</div>
+    {f'<div style="margin-top:6px;font-size:12px;color:{t_mut};padding:4px 10px;background:#F3F4F6;border-radius:6px;font-style:italic">{reason}</div>' if reason else ''}
+  </div>
+  <div style="padding:14px 18px">
+    <div style="display:flex;flex-wrap:wrap;gap:18px;margin-bottom:12px">
+      <div><span style="font-size:10px;font-weight:700;color:{t_mut};text-transform:uppercase;display:block;margin-bottom:2px">Owner</span><span style="font-size:12px;color:{t_pri};font-weight:600">{owner}</span></div>
+      <div><span style="font-size:10px;font-weight:700;color:{t_mut};text-transform:uppercase;display:block;margin-bottom:2px">Created</span><span style="font-size:12px;color:{t_pri}">{created}</span></div>
+      {f'<div><span style="font-size:10px;font-weight:700;color:{t_mut};text-transform:uppercase;display:block;margin-bottom:4px">Tactics</span>{tactic_tags}</div>' if tactic_tags else ''}
+    </div>
+    {f'<div style="background:rgba(208,74,2,0.05);border:1px solid rgba(208,74,2,0.15);border-left:3px solid {brand};border-radius:6px;padding:12px;margin-bottom:12px"><div style="font-size:10px;font-weight:700;color:{brand};text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">AI Analysis Brief</div><div style="font-size:12px;color:{t_pri};line-height:1.7">{brief_text}</div></div>' if brief_text else ''}
+    {enr_section}
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid {border}">
+      {btn("View in Sentinel Vigil", view_url, brand)}
+      {btn("Add Comment", comment_url, "#374151")}
+      {btn("Add Enrichment Analysis as Comment", enrich_url, "#1E40AF")}
+    </div>
+  </div>
+</div>"""
+
+        p4_count = len(groups[score])
+        sections_html += f"""
+<div style="margin-bottom:28px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding-bottom:10px;border-bottom:2px solid {pcolor}">
+    <span style="background:{pcolor};color:#fff;font-size:11px;font-weight:800;padding:4px 14px;border-radius:20px">{plabel}</span>
+    <span style="font-size:12px;color:{t_mut}">{p4_count} incident{'s' if p4_count != 1 else ''}</span>
+  </div>
+  {cards}
+</div>"""
+
+    total     = summary.get("total", len(incidents))
+    open_c    = summary.get("open", sum(1 for i in incidents if i.get("status") not in ("Closed",)))
+    high_c    = summary.get("high_count", sum(1 for i in incidents if i.get("severity") == "High"))
+    p4plus    = sum(1 for i in incidents if i.get("priority_score", 0) >= 4)
+    st_style  = f"background:{card_bg};border:1px solid {border};border-radius:8px;padding:16px 20px;text-align:center;flex:1;min-width:80px"
+    key_items = "".join(
+        f'<span style="background:{c}22;color:{c};font-size:11px;font-weight:700;padding:3px 12px;border-radius:20px;margin-right:6px">{l}</span>'
+        for l, c in [("P5 Critical","#C0392B"),("P4 High","#E67E22"),("P3 Medium","#F39C12"),("P2 Low","#27AE60"),("P1 Minimal","#7F8C8D")]
+    )
+
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sentinel Vigil — Incident Priority Report</title></head>
+<body style="margin:0;padding:0;background:#F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<div style="max-width:820px;margin:0 auto;padding:24px 16px">
+
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,{dark_bg} 0%,#2D3250 100%);border-radius:12px;padding:32px;margin-bottom:20px;text-align:center">
+    <div style="font-size:24px;font-weight:800;color:#FFFFFF;margin-bottom:6px">🛡 Sentinel Vigil</div>
+    <div style="font-size:16px;font-weight:600;color:{brand};margin-bottom:10px">Incident Priority Report</div>
+    <div style="font-size:13px;color:#9CA3AF">Period: Last {days} days &nbsp;·&nbsp; Generated: {generated_at} &nbsp;·&nbsp; {len(incidents)} active incidents analysed</div>
+  </div>
+
+  <!-- Summary -->
+  <div style="margin-bottom:20px">
+    <div style="font-size:12px;font-weight:700;color:{t_mut};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Summary</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div style="{st_style}"><div style="font-size:28px;font-weight:800;color:{brand}">{total}</div><div style="font-size:11px;color:{t_mut};font-weight:700;text-transform:uppercase;margin-top:4px">Total Active</div></div>
+      <div style="{st_style}"><div style="font-size:28px;font-weight:800;color:#C0392B">{open_c}</div><div style="font-size:11px;color:{t_mut};font-weight:700;text-transform:uppercase;margin-top:4px">Open</div></div>
+      <div style="{st_style}"><div style="font-size:28px;font-weight:800;color:#E67E22">{high_c}</div><div style="font-size:11px;color:{t_mut};font-weight:700;text-transform:uppercase;margin-top:4px">High Severity</div></div>
+      <div style="{st_style}"><div style="font-size:28px;font-weight:800;color:#1E40AF">{p4plus}</div><div style="font-size:11px;color:{t_mut};font-weight:700;text-transform:uppercase;margin-top:4px">P4 / P5 Priority</div></div>
+    </div>
+  </div>
+
+  <!-- Priority key -->
+  <div style="background:{card_bg};border:1px solid {border};border-radius:8px;padding:14px 18px;margin-bottom:24px">
+    <div style="font-size:11px;font-weight:700;color:{t_mut};text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">Priority Key</div>
+    <div>{key_items}</div>
+  </div>
+
+  <!-- Incident groups -->
+  {sections_html if sections_html else f'<div style="text-align:center;padding:40px;color:{t_mut}">No incidents to display</div>'}
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:24px 0;border-top:1px solid {border};margin-top:8px">
+    <div style="font-size:12px;color:{t_mut}">Generated by <strong style="color:{brand}">Sentinel Vigil</strong> · Microsoft Sentinel Security Operations Platform</div>
+    <div style="font-size:11px;color:{t_mut};margin-top:4px">{generated_at}</div>
+  </div>
+</div></body></html>"""
+
+
+async def _send_graph_mail(to_list: list[str], subject: str, html_body: str) -> None:
+    """Send an HTML email via Microsoft Graph API (client-credentials flow)."""
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+    from backend.config import settings
+
+    from_addr = settings.GRAPH_MAIL_FROM
+    tenant_id = settings.TENANT_ID
+    client_id = settings.GRAPH_CLIENT_ID
+    client_secret = settings.GRAPH_CLIENT_SECRET
+
+    if not from_addr:
+        raise ValueError("GRAPH_MAIL_FROM is not configured — set it in .env or Settings page")
+    if not tenant_id or not client_id or not client_secret:
+        raise ValueError(
+            "Graph mail requires AZURE_TENANT_ID, AZURE_CLIENT_ID (or GRAPH_CLIENT_ID), "
+            "and AZURE_CLIENT_SECRET (or GRAPH_CLIENT_SECRET)"
+        )
+    if not to_list:
+        raise ValueError("No recipients specified")
+
+    import asyncio as _aio
+
+    def _do_send():
+        import json as _j
+        # 1. Acquire token
+        token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+        token_data = urllib.parse.urlencode({
+            "grant_type": "client_credentials",
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "scope": "https://graph.microsoft.com/.default",
+        }).encode()
+        token_req = urllib.request.Request(token_url, data=token_data, method="POST")
+        with urllib.request.urlopen(token_req, timeout=30) as r:
+            token_resp = _j.loads(r.read())
+        access_token = token_resp.get("access_token")
+        if not access_token:
+            raise RuntimeError(f"Failed to obtain Graph token: {token_resp.get('error_description', token_resp)}")
+
+        # 2. Build sendMail payload
+        payload = _j.dumps({
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": html_body},
+                "toRecipients": [{"emailAddress": {"address": addr}} for addr in to_list],
+                "from": {"emailAddress": {"address": from_addr}},
+            },
+            "saveToSentItems": "true",
+        }).encode("utf-8")
+
+        mail_url = f"https://graph.microsoft.com/v1.0/users/{urllib.parse.quote(from_addr)}/sendMail"
+        mail_req = urllib.request.Request(
+            mail_url, data=payload, method="POST",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(mail_req, timeout=30) as r:
+            # 202 Accepted — no body
+            pass
+
+    loop = _aio.get_event_loop()
+    await loop.run_in_executor(None, _do_send)
+
+
+@router.post("/send-email-report")
+async def send_email_report(req: EmailReportRequest):
+    """
+    Fetch active incidents for the period, rank by LLM priority, optionally enrich top
+    incidents via VT + AbuseIPDB, generate AI briefs, then send a decorated HTML email.
+    """
+    import asyncio as _aio
+    import os as _os
+    import requests as _rq
+    from datetime import datetime as _dt
+
+    if not req.to:
+        raise HTTPException(status_code=400, detail="At least one recipient email is required")
+
+    # 1. Fetch active incidents
+    days = req.days
+    q = f"""
+    SecurityIncident
+    | where TimeGenerated > ago({days}d)
+    | summarize arg_max(TimeGenerated, *) by IncidentNumber
+    | where Status in ("Active", "New")
+    | extend OwnerName = iff(
+        isempty(Owner) or Owner == "null" or Owner == "{{}}",
+        "Unassigned",
+        coalesce(
+            tostring(todynamic(Owner).userPrincipalName),
+            tostring(todynamic(Owner).assignedTo),
+            "Unassigned"
+        )
+      )
+    | extend OwnerName = iff(OwnerName == "null" or OwnerName == "", "Unassigned", OwnerName)
+    | extend MTTR_Hours = toreal(datetime_diff('hour', now(), CreatedTime))
+    | project
+        IncidentNumber, Title, Severity, Status, OwnerName, CreatedTime, MTTR_Hours,
+        Tactics     = column_ifexists("Tactics",      dynamic(null)),
+        Description = tostring(column_ifexists("Description", ""))
+    | sort by CreatedTime desc
+    | limit {req.max_incidents}
+    """
+    try:
+        rows = (await run_kql(q, days=days)).get("rows", [])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch incidents: {e}")
+
+    def _tactics(raw) -> str:
+        if raw is None or raw == "":
+            return ""
+        if isinstance(raw, list):
+            return ", ".join(str(t) for t in raw if t)
+        s = str(raw).strip()
+        if s.startswith("["):
+            try:
+                arr = _json_g.loads(s)
+                if isinstance(arr, list):
+                    return ", ".join(str(t) for t in arr if t)
+            except Exception:
+                pass
+        return s
+
+    incidents = [{
+        "number":      r.get("IncidentNumber", ""),
+        "title":       r.get("Title", ""),
+        "severity":    r.get("Severity", "Unknown"),
+        "status":      r.get("Status", "Unknown"),
+        "owner":       r.get("OwnerName", "Unassigned"),
+        "created":     r.get("CreatedTime", ""),
+        "mttr_hours":  float(r.get("MTTR_Hours") or 0),
+        "tactics":     _tactics(r.get("Tactics")),
+        "description": r.get("Description", "") or "",
+        "closed": "", "last_updated": "",
+        "classification": "", "classification_comment": "",
+    } for r in rows]
+
+    if not incidents:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active incidents found in the last {days} days"
+        )
+
+    # Filter to caller-selected incidents if specified
+    if req.incident_numbers:
+        selected = set(req.incident_numbers)
+        incidents = [i for i in incidents if i["number"] in selected]
+        if not incidents:
+            raise HTTPException(
+                status_code=404,
+                detail="None of the selected incident numbers were found as active incidents"
+            )
+
+    # 2. Priority ranking via LLM
+    try:
+        ranked = (await rank_incidents_by_priority({"incidents": incidents}))["ranked"]
+    except Exception as e:
+        logger.warning("Priority ranking unavailable, using severity fallback: %s", e)
+        ranked = incidents
+        _fallback = {"High": 4, "Medium": 3, "Low": 2, "Informational": 1}
+        for inc in ranked:
+            inc["priority_score"]  = _fallback.get(inc.get("severity", ""), 3)
+            inc["priority_reason"] = ""
+
+    # 3. Batch LLM briefs — single call for all incidents (optional)
+    briefs: dict = {}
+    llm_brief_error: str = ""
+    if req.include_llm:
+        try:
+            brief_lines = []
+            for inc in ranked:
+                desc = (inc.get("description") or "")[:200].replace("\n", " ")
+                desc_part = f" | Desc:{desc}" if desc else ""
+                brief_lines.append(
+                    f"{inc['number']}: [{inc['severity']}] {inc['title']}"
+                    f" | Tactics:{inc.get('tactics','None') or 'None'}{desc_part}"
+                )
+            brief_system = (
+                "You are ARIA, a Tier-3 Cyber Security Analyst. "
+                "For each incident write exactly 2 sentences: "
+                "first sentence identifies the most likely threat or attack pattern, "
+                "second sentence states the single most critical immediate action. "
+                "Be specific to the incident title and description. "
+                "Respond ONLY as a valid JSON object — no markdown, no other text:\n"
+                '{"123": "Threat sentence. Action sentence.", "456": "..."}'
+            )
+            brief_user = "Write 2-sentence investigation briefs:\n\n" + "\n".join(brief_lines)
+            br = await llm_service.complete(brief_system, brief_user)
+            btext = br["text"].strip()
+            # Strip markdown code fences if present
+            btext = _re_g.sub(r'^```[a-z]*\n?', '', btext, flags=_re_g.MULTILINE)
+            btext = btext.replace('```', '')
+            bm = _re_g.search(r'\{.*\}', btext, _re_g.DOTALL)
+            if bm:
+                raw_b = _json_g.loads(bm.group(0))
+                for k, v in raw_b.items():
+                    k_clean = str(k).lstrip('#').strip()
+                    try:
+                        briefs[int(k_clean)] = str(v)
+                    except (ValueError, TypeError):
+                        briefs[k_clean] = str(v)
+            logger.info("LLM briefs generated for %d incidents", len(briefs))
+        except Exception as e:
+            llm_brief_error = str(e)
+            logger.warning("Batch briefs LLM call failed: %s", e)
+
+    # Fallback: use description snippet when LLM brief is missing
+    for inc in ranked:
+        num = inc.get("number")
+        try:
+            key = int(num)
+        except (TypeError, ValueError):
+            key = str(num)
+        if not briefs.get(key) and not briefs.get(str(num), ""):
+            desc = (inc.get("description") or "").strip()
+            title = inc.get("title", "")
+            tactics = inc.get("tactics") or ""
+            if desc:
+                fallback = desc[:300] + ("…" if len(desc) > 300 else "")
+            else:
+                tact_part = f" Tactics: {tactics}." if tactics else ""
+                fallback = f"{title}.{tact_part} No further description available."
+            briefs[key] = fallback
+
+    # 4. Enrich top P4/P5 incidents (optional)
+    if req.include_enrichment:
+        vt_key = _os.environ.get("VIRUSTOTAL_API_KEY", "")
+        ab_key = _os.environ.get("ABUSEIPDB_TOKEN", "")
+        top    = [i for i in ranked if i.get("priority_score", 0) >= 4][:8]
+
+        for inc in top:
+            num = inc.get("number")
+            try:
+                info_q = (
+                    f"SecurityIncident | where IncidentNumber == {num}"
+                    " | summarize arg_max(TimeGenerated, *) by IncidentNumber"
+                    " | project IncidentName = tostring(column_ifexists('IncidentName', '')) | limit 1"
+                )
+                info_rows = (await run_kql(info_q, days=365)).get("rows", [])
+                if not info_rows:
+                    continue
+                inc_name = str(info_rows[0].get("IncidentName", "")).strip()
+                if not inc_name:
+                    continue
+                entities = await _fetch_arm_entities(inc_name)
+                enr_list = []
+                for ent in entities[:8]:
+                    etype = str(ent.get("type", "")).lower()
+                    entry: dict = {"type": etype}
+                    if etype == "ip":
+                        addr = ent.get("Address", "")
+                        if not addr:
+                            continue
+                        entry["value"] = addr
+                        if ab_key:
+                            try:
+                                r = _rq.get(
+                                    "https://api.abuseipdb.com/api/v2/check",
+                                    params={"ipAddress": addr, "maxAgeInDays": 90},
+                                    headers={"Key": ab_key, "Accept": "application/json"},
+                                    timeout=8,
+                                )
+                                if r.status_code == 200:
+                                    d = r.json().get("data", {})
+                                    entry["abuse_score"] = d.get("abuseConfidenceScore", 0)
+                            except Exception:
+                                pass
+                        if vt_key:
+                            try:
+                                r = _rq.get(
+                                    f"https://www.virustotal.com/api/v3/ip_addresses/{addr}",
+                                    headers={"x-apikey": vt_key}, timeout=8,
+                                )
+                                if r.status_code == 200:
+                                    attrs = r.json().get("data", {}).get("attributes", {})
+                                    stats = attrs.get("last_analysis_stats", {})
+                                    entry["vt_malicious"] = stats.get("malicious", 0)
+                                    entry["vt_total"]     = sum(stats.values())
+                            except Exception:
+                                pass
+                    elif etype == "file":
+                        h = ent.get("Hash", "")
+                        if not h or len(h) < 32:
+                            continue
+                        entry["value"] = f"{ent.get('Name','file')} [{h[:10]}…]"
+                        if vt_key:
+                            try:
+                                r = _rq.get(
+                                    f"https://www.virustotal.com/api/v3/files/{h}",
+                                    headers={"x-apikey": vt_key}, timeout=8,
+                                )
+                                if r.status_code == 200:
+                                    attrs = r.json().get("data", {}).get("attributes", {})
+                                    stats = attrs.get("last_analysis_stats", {})
+                                    entry["vt_malicious"] = stats.get("malicious", 0)
+                                    entry["vt_total"]     = sum(stats.values())
+                            except Exception:
+                                pass
+                    elif etype in ("url", "dns"):
+                        domain = ent.get("URL") or ent.get("Domain", "")
+                        if not domain:
+                            continue
+                        entry["value"] = domain[:60]
+                        if vt_key:
+                            try:
+                                import base64 as _b64
+                                enc = _b64.urlsafe_b64encode(domain.encode()).decode().rstrip("=")
+                                r = _rq.get(
+                                    f"https://www.virustotal.com/api/v3/urls/{enc}",
+                                    headers={"x-apikey": vt_key}, timeout=8,
+                                )
+                                if r.status_code == 200:
+                                    attrs = r.json().get("data", {}).get("attributes", {})
+                                    stats = attrs.get("last_analysis_stats", {})
+                                    entry["vt_malicious"] = stats.get("malicious", 0)
+                                    entry["vt_total"]     = sum(stats.values())
+                            except Exception:
+                                pass
+                    else:
+                        continue
+                    if entry.get("value"):
+                        enr_list.append(entry)
+                inc["_enrichment_summary"] = enr_list
+            except Exception as _ee:
+                logger.warning("Email enrichment for #%s failed: %s", num, _ee)
+
+    # 5. Build and send email
+    generated_at = _dt.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    summary_dict = {
+        "total":      len(ranked),
+        "open":       sum(1 for i in ranked if i.get("status") not in ("Closed",)),
+        "high_count": sum(1 for i in ranked if i.get("severity") == "High"),
+    }
+    html_body = _build_incident_email_html(
+        incidents=ranked,
+        summary=summary_dict,
+        days=days,
+        app_url=req.app_url.rstrip("/"),
+        generated_at=generated_at,
+        briefs=briefs,
+    )
+    subject = (
+        f"[Sentinel Vigil] Incident Priority Report — "
+        f"{len(ranked)} Active Incidents (Last {days}d)"
+    )
+    try:
+        await _send_graph_mail(req.to, subject, html_body)
+    except ValueError as ve:
+        raise HTTPException(status_code=503, detail=str(ve))
+    except Exception as e:
+        logger.error("Graph mail send failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Email send failed: {e}")
+
+    return {
+        "sent": True,
+        "recipients": req.to,
+        "incident_count": len(ranked),
+        "subject": subject,
+        "llm_briefs": len(briefs),
+        "llm_error": llm_brief_error or None,
+    }
+
+
+@router.post("/incidents/{incident_number}/add-enrichment-comment")
+async def add_enrichment_comment(incident_number: int, payload: dict = Body(default={})):
+    """
+    Fetch entities for the incident (from payload or Sentinel), run VT + AbuseIPDB
+    enrichment, generate an LLM investigation brief, and post the formatted analysis
+    as a comment to the Sentinel incident via the Logic App webhook.
+    """
+    import asyncio as _aio
+    import os as _os
+    import requests as _rq
+    import html as _html_lib
+    from backend.config import settings
+
+    webhook_url = settings.SENTINEL_COMMENT_WEBHOOK_URL
+    if not webhook_url:
+        raise HTTPException(
+            status_code=503,
+            detail="SENTINEL_COMMENT_WEBHOOK_URL is not configured. Set this env variable to enable comment posting.",
+        )
+
+    entities         = list(payload.get("entities", []))
+    incident_title   = str(payload.get("title",    f"Incident #{incident_number}"))
+    incident_severity = str(payload.get("severity", "Unknown"))
+
+    # Auto-fetch entities + metadata from Sentinel when none are provided
+    if not entities:
+        try:
+            info_q = (
+                f"SecurityIncident | where IncidentNumber == {incident_number}"
+                " | summarize arg_max(TimeGenerated, *) by IncidentNumber"
+                " | project IncidentName = tostring(column_ifexists('IncidentName','')), Title, Severity | limit 1"
+            )
+            info_rows = (await run_kql(info_q, days=365)).get("rows", [])
+            if info_rows:
+                inc_name = str(info_rows[0].get("IncidentName", "")).strip()
+                if not incident_title or incident_title == f"Incident #{incident_number}":
+                    incident_title = info_rows[0].get("Title", incident_title)
+                if incident_severity == "Unknown":
+                    incident_severity = info_rows[0].get("Severity", "Unknown")
+                if inc_name:
+                    entities = await _fetch_arm_entities(inc_name)
+        except Exception as _fe:
+            logger.warning("Auto-fetch entities for comment failed: %s", _fe)
+
+    # Run enrichment for LLM context (markdown)
+    enrichment_md = await _enrich_entities(entities)
+
+    # Run enrichment for HTML display table
+    vt_key = _os.environ.get("VIRUSTOTAL_API_KEY", "")
+    ab_key = _os.environ.get("ABUSEIPDB_TOKEN", "")
+    enr_display: list[dict] = []
+    for ent in entities[:12]:
+        etype = str(ent.get("type", "")).lower()
+        entry: dict = {"type": etype}
+        if etype == "ip":
+            addr = ent.get("Address", "")
+            if not addr:
+                continue
+            entry["value"] = addr
+            if ab_key:
+                try:
+                    r = _rq.get(
+                        "https://api.abuseipdb.com/api/v2/check",
+                        params={"ipAddress": addr, "maxAgeInDays": 90},
+                        headers={"Key": ab_key, "Accept": "application/json"},
+                        timeout=8,
+                    )
+                    if r.status_code == 200:
+                        d = r.json().get("data", {})
+                        entry["abuse_score"]   = d.get("abuseConfidenceScore", 0)
+                        entry["abuse_country"] = d.get("countryCode", "")
+                except Exception:
+                    pass
+            if vt_key:
+                try:
+                    r = _rq.get(
+                        f"https://www.virustotal.com/api/v3/ip_addresses/{addr}",
+                        headers={"x-apikey": vt_key}, timeout=8,
+                    )
+                    if r.status_code == 200:
+                        attrs = r.json().get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        entry["vt_malicious"]   = stats.get("malicious", 0)
+                        entry["vt_suspicious"]  = stats.get("suspicious", 0)
+                        entry["vt_total"]       = sum(stats.values())
+                        entry["vt_country"]     = attrs.get("country", "")
+                except Exception:
+                    pass
+        elif etype == "file":
+            h = ent.get("Hash", "")
+            if not h or len(h) < 32:
+                continue
+            entry["value"] = f"{ent.get('Name','file')} [{h[:12]}…]"
+            if vt_key:
+                try:
+                    r = _rq.get(
+                        f"https://www.virustotal.com/api/v3/files/{h}",
+                        headers={"x-apikey": vt_key}, timeout=8,
+                    )
+                    if r.status_code == 200:
+                        attrs = r.json().get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        entry["vt_malicious"]    = stats.get("malicious", 0)
+                        entry["vt_total"]        = sum(stats.values())
+                        entry["vt_threat_label"] = (
+                            attrs.get("popular_threat_classification", {})
+                                 .get("suggested_threat_label", "")
+                        )
+                except Exception:
+                    pass
+        elif etype in ("url", "dns"):
+            domain = ent.get("URL") or ent.get("Domain", "")
+            if not domain:
+                continue
+            entry["value"] = domain[:80]
+            if vt_key:
+                try:
+                    import base64 as _b64
+                    enc = _b64.urlsafe_b64encode(domain.encode()).decode().rstrip("=")
+                    r = _rq.get(
+                        f"https://www.virustotal.com/api/v3/urls/{enc}",
+                        headers={"x-apikey": vt_key}, timeout=8,
+                    )
+                    if r.status_code == 200:
+                        attrs = r.json().get("data", {}).get("attributes", {})
+                        stats = attrs.get("last_analysis_stats", {})
+                        entry["vt_malicious"] = stats.get("malicious", 0)
+                        entry["vt_total"]     = sum(stats.values())
+                except Exception:
+                    pass
+        else:
+            continue
+        if entry.get("value"):
+            enr_display.append(entry)
+
+    # Generate LLM investigation brief
+    brief = ""
+    try:
+        brief_system = (
+            "You are ARIA, an elite Tier-3 SOC Analyst. Analyze this Sentinel incident and produce "
+            "a concise investigation summary with these sections:\n"
+            "**Threat Assessment**: 2 sentences on the likely threat scenario\n"
+            "**Key Indicators**: Bullet list of the most significant IoCs/entities\n"
+            "**Immediate Actions**: Top 3 numbered action items\n"
+            "**Risk Level**: One line — Critical/High/Medium/Low with justification\n"
+            "Reference entity enrichment data where provided. Use markdown formatting."
+        )
+        brief_user = (
+            f"Incident #{incident_number}: {incident_title}\n"
+            f"Severity: {incident_severity}\n"
+            f"Entities: {_json_g.dumps([{k: v for k, v in e.items() if k != '_enrichment'} for e in entities[:10]], indent=2)}\n"
+            f"{enrichment_md}"
+        )
+        result = await llm_service.complete(brief_system, brief_user)
+        brief = result["text"]
+    except Exception as e:
+        logger.warning("LLM brief for comment failed: %s", e)
+        brief = "LLM analysis unavailable at this time."
+
+    # Build enrichment HTML table
+    border   = "#E5E7EB"
+    brand    = "#D04A02"
+    enr_rows = ""
+    for e in enr_display:
+        mal   = e.get("vt_malicious", 0)
+        vtot  = e.get("vt_total", 0)
+        abuse = e.get("abuse_score", 0)
+        tlbl  = _html_lib.escape(e.get("vt_threat_label", "") or "—")
+        vc    = "#C0392B" if mal > 0 else "#27AE60"
+        ac    = "#C0392B" if abuse > 50 else "#E67E22" if abuse > 20 else "#27AE60"
+        enr_rows += (
+            f'<tr><td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;font-family:monospace">{_html_lib.escape(e.get("value",""))}</td>'
+            f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px">{e.get("type","").upper()}</td>'
+            f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;color:{vc};font-weight:600">{mal}/{vtot} malicious</td>'
+            f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px;color:{ac};font-weight:600">{abuse}/100</td>'
+            f'<td style="padding:5px 10px;border-bottom:1px solid {border};font-size:11px">{tlbl}</td></tr>'
+        )
+    enr_table = ""
+    if enr_rows:
+        enr_table = (
+            f'<h3 style="color:{brand};font-size:13px;font-weight:700;border-bottom:1px solid {border};padding-bottom:6px;margin-top:18px">Threat Intelligence Enrichment</h3>'
+            f'<table style="border-collapse:collapse;width:100%;border:1px solid {border};border-radius:6px">'
+            f'<thead><tr style="background:#F9FAFB">'
+            f'<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#6B7280;text-transform:uppercase">Indicator</th>'
+            f'<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#6B7280;text-transform:uppercase">Type</th>'
+            f'<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#6B7280;text-transform:uppercase">VirusTotal</th>'
+            f'<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#6B7280;text-transform:uppercase">AbuseIPDB</th>'
+            f'<th style="padding:7px 10px;text-align:left;font-size:10px;font-weight:700;color:#6B7280;text-transform:uppercase">Threat Label</th>'
+            f'</tr></thead><tbody>{enr_rows}</tbody></table>'
+        )
+
+    # Convert LLM markdown to basic HTML for Sentinel comment
+    def _md_brief_html(text: str) -> str:
+        out_lines = []
+        for line in text.split("\n"):
+            t = line.strip()
+            if t.startswith("**") and t.endswith("**"):
+                out_lines.append(f'<h4 style="color:{brand};margin:12px 0 4px;font-size:13px">{_html_lib.escape(t.strip("*"))}</h4>')
+            elif t.startswith("**") and "**" in t[2:]:
+                inner = _re_g.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', _html_lib.escape(t))
+                out_lines.append(f'<p style="font-size:12px;margin:4px 0;color:#1F2937">{inner}</p>')
+            elif t.startswith("- ") or t.startswith("* "):
+                out_lines.append(f'<li style="margin:3px 0;font-size:12px;color:#374151">{_html_lib.escape(t[2:])}</li>')
+            elif _re_g.match(r'^\d+\. ', t):
+                m = _re_g.match(r'^(\d+)\. (.*)', t)
+                if m:
+                    out_lines.append(f'<li style="margin:3px 0;font-size:12px;color:#374151">{_html_lib.escape(m.group(2))}</li>')
+            elif t:
+                out_lines.append(f'<p style="font-size:12px;margin:4px 0;color:#374151">{_html_lib.escape(t)}</p>')
+        return "\n".join(out_lines)
+
+    sev_c = {"High": "#C0392B", "Medium": "#E67E22", "Low": "#27AE60"}.get(incident_severity, "#3498DB")
+    comment_html = f"""<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:900px">
+  <div style="background:linear-gradient(135deg,#1A1E2E,#2D3250);padding:16px 20px;border-radius:8px 8px 0 0">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:16px">🛡</span>
+      <div>
+        <div style="color:#FFFFFF;font-size:13px;font-weight:700">Sentinel Vigil — Automated Enrichment Analysis</div>
+        <div style="color:#9CA3AF;font-size:11px">Incident #{incident_number} · {_html_lib.escape(incident_title)}</div>
+      </div>
+      <span style="margin-left:auto;background:{sev_c}33;color:{sev_c};font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px">{_html_lib.escape(incident_severity)}</span>
+    </div>
+  </div>
+  <div style="border:1px solid {border};border-top:none;border-radius:0 0 8px 8px;padding:18px 20px">
+    {_md_brief_html(brief)}
+    {enr_table}
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid {border};font-size:10px;color:#9CA3AF">
+      Auto-generated by Sentinel Vigil · VT + AbuseIPDB enrichment · Claude AI analysis
+    </div>
+  </div>
+</div>"""
+
+    # POST to Logic App webhook
+    def _post_webhook():
+        return _rq.post(
+            webhook_url,
+            json={"incidentId": str(incident_number), "message": comment_html},
+            timeout=30,
+        )
+
+    loop = _aio.get_event_loop()
+    try:
+        resp = await loop.run_in_executor(None, _post_webhook)
+        if not resp.ok:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Webhook returned HTTP {resp.status_code}: {resp.text[:300]}",
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Enrichment comment webhook failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"Webhook error: {e}")
+
+    return {
+        "success": True,
+        "message": f"Enrichment analysis posted as comment to incident #{incident_number}",
+    }
+
+
+@router.post("/incidents/{incident_number}/post-comment")
+async def post_incident_comment_plain(incident_number: int, payload: dict = Body(default={})):
+    """Post a plain-text comment to a Sentinel incident (used by the standalone comment form)."""
+    import asyncio as _aio
+    import requests as _rq
+    from backend.config import settings
+
+    webhook_url = settings.SENTINEL_COMMENT_WEBHOOK_URL
+    if not webhook_url:
+        raise HTTPException(status_code=503, detail="SENTINEL_COMMENT_WEBHOOK_URL is not configured")
+
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Comment message cannot be empty")
+
+    def _call():
+        return _rq.post(
+            webhook_url,
+            json={"incidentId": str(incident_number), "message": message},
+            timeout=30,
+        )
+
+    loop = _aio.get_event_loop()
+    try:
+        resp = await loop.run_in_executor(None, _call)
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=f"Webhook returned {resp.status_code}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Webhook error: {e}")
+
+    return {"success": True}
+
+
+@router.get("/incidents/{incident_number}/comment-form", response_class=HTMLResponse)
+async def incident_comment_form_page(incident_number: int):
+    """Standalone HTML comment form — linked from incident report emails."""
+    content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add Comment — Incident #{incident_number}</title>
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#F3F4F6;margin:0;padding:24px}}
+  .card{{background:#fff;border-radius:10px;padding:28px;max-width:540px;margin:0 auto;box-shadow:0 2px 16px rgba(0,0,0,0.08)}}
+  h2{{color:#D04A02;margin:0 0 6px;font-size:18px}} .sub{{color:#6B7280;font-size:13px;margin-bottom:20px}}
+  textarea{{width:100%;height:150px;border:1px solid #D1D5DB;border-radius:8px;padding:12px;font-size:13px;resize:vertical;box-sizing:border-box;outline:none}}
+  textarea:focus{{border-color:#D04A02;box-shadow:0 0 0 3px rgba(208,74,2,0.1)}}
+  button{{background:#D04A02;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;margin-top:12px}}
+  button:hover{{background:#B84201}} button:disabled{{background:#9CA3AF;cursor:default}}
+  .ok{{background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:14px;color:#065F46;margin-top:12px;display:none;font-size:13px}}
+  .err{{background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;padding:14px;color:#991B1B;margin-top:12px;display:none;font-size:13px}}
+</style></head>
+<body><div class="card">
+  <h2>🛡 Add Comment</h2>
+  <div class="sub">Incident #{incident_number} · Microsoft Sentinel via Sentinel Vigil</div>
+  <form id="f">
+    <textarea id="msg" placeholder="Enter your investigation notes, findings, or actions taken…" required></textarea>
+    <button type="submit" id="btn">Post Comment to Sentinel</button>
+  </form>
+  <div class="ok" id="ok">✅ Comment posted to Sentinel incident #{incident_number}</div>
+  <div class="err" id="err"></div>
+</div>
+<script>
+document.getElementById('f').onsubmit=async function(e){{
+  e.preventDefault();
+  const msg=document.getElementById('msg').value.trim();
+  if(!msg)return;
+  const btn=document.getElementById('btn');
+  btn.disabled=true;btn.textContent='Posting…';
+  try{{
+    const res=await fetch('/api/incident-analytics/incidents/{incident_number}/post-comment',{{
+      method:'POST',headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{message:msg}})
+    }});
+    const data=await res.json();
+    if(res.ok){{document.getElementById('ok').style.display='block';document.getElementById('f').style.display='none'}}
+    else{{document.getElementById('err').textContent='❌ '+(data.detail||'Failed');document.getElementById('err').style.display='block';btn.disabled=false;btn.textContent='Post Comment to Sentinel'}}
+  }}catch(ex){{document.getElementById('err').textContent='❌ Network error: '+ex.message;document.getElementById('err').style.display='block';btn.disabled=false;btn.textContent='Post Comment to Sentinel'}}
+}};
+</script></body></html>"""
+    return HTMLResponse(content=content)
+
+
+@router.get("/incidents/{incident_number}/enrich-comment-confirm", response_class=HTMLResponse)
+async def enrich_comment_confirm_page(incident_number: int):
+    """Confirmation page — linked from emails — to trigger enrichment + AI comment posting."""
+    content = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Add Enrichment Analysis — Incident #{incident_number}</title>
+<style>
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#F3F4F6;margin:0;padding:24px}}
+  .card{{background:#fff;border-radius:10px;padding:28px;max-width:540px;margin:0 auto;box-shadow:0 2px 16px rgba(0,0,0,0.08)}}
+  h2{{color:#D04A02;margin:0 0 6px;font-size:18px}} .sub{{color:#6B7280;font-size:13px;margin-bottom:16px}}
+  .info{{background:rgba(208,74,2,0.05);border:1px solid rgba(208,74,2,0.2);border-left:3px solid #D04A02;border-radius:6px;padding:12px 16px;margin-bottom:20px;font-size:13px;color:#374151;line-height:1.6}}
+  button{{background:#1E40AF;color:#fff;border:none;padding:12px 28px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer}}
+  button:hover{{background:#1D3EA0}} button:disabled{{background:#9CA3AF;cursor:default}}
+  .prog{{font-size:13px;color:#6B7280;margin-top:14px;display:none}}
+  .ok{{background:#D1FAE5;border:1px solid #6EE7B7;border-radius:8px;padding:14px;color:#065F46;margin-top:16px;display:none;font-size:13px}}
+  .err{{background:#FEE2E2;border:1px solid #FECACA;border-radius:8px;padding:14px;color:#991B1B;margin-top:16px;display:none;font-size:13px}}
+</style></head>
+<body><div class="card">
+  <h2>🧠 Add Enrichment Analysis as Comment</h2>
+  <div class="sub">Incident #{incident_number} · Sentinel Vigil Automated Analysis</div>
+  <div class="info">
+    This action will:<br>
+    • Fetch entities (IPs, domains, file hashes) for incident #{incident_number}<br>
+    • Run VirusTotal &amp; AbuseIPDB enrichment checks on all indicators<br>
+    • Generate a Tier-3 AI investigation brief via Claude<br>
+    • Post the full analysis as a formatted comment in Microsoft Sentinel
+  </div>
+  <button id="btn" onclick="go()">Confirm &amp; Post Analysis</button>
+  <div class="prog" id="prog">⏳ Fetching entities, running enrichment &amp; generating AI brief… (15–30 seconds)</div>
+  <div class="ok" id="ok"></div>
+  <div class="err" id="err"></div>
+</div>
+<script>
+async function go(){{
+  const btn=document.getElementById('btn');
+  btn.disabled=true;btn.textContent='Processing…';
+  document.getElementById('prog').style.display='block';
+  try{{
+    const res=await fetch('/api/incident-analytics/incidents/{incident_number}/add-enrichment-comment',{{
+      method:'POST',headers:{{'Content-Type':'application/json'}},body:'{{}}'
+    }});
+    const data=await res.json();
+    document.getElementById('prog').style.display='none';
+    if(res.ok){{document.getElementById('ok').textContent='✅ '+(data.message||'Analysis posted as Sentinel comment');document.getElementById('ok').style.display='block';btn.style.display='none'}}
+    else{{document.getElementById('err').textContent='❌ '+(data.detail||'Failed');document.getElementById('err').style.display='block';btn.disabled=false;btn.textContent='Retry'}}
+  }}catch(ex){{document.getElementById('prog').style.display='none';document.getElementById('err').textContent='❌ Network error: '+ex.message;document.getElementById('err').style.display='block';btn.disabled=false;btn.textContent='Retry'}}
+}}
+</script></body></html>"""
+    return HTMLResponse(content=content)

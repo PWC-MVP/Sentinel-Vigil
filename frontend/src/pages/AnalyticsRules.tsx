@@ -574,11 +574,12 @@ function AiReportPanel({ days }: { days: number }) {
     const [report,   setReport]   = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
     const [error,    setError]    = useState<string | null>(null);
     const [expanded, setExpanded] = useState(true);
+    const [model,    setModel]    = useState('claude-sonnet-4-6');
 
     const generate = async () => {
         setLoading(true); setError(null); setReport(null); setSuccess(null);
         try {
-            const res = await axios.get(`/api/analytics-rules/report?days=${days}`, { timeout: 0 });
+            const res = await axios.get(`/api/analytics-rules/report?days=${days}&model=${model}`, { timeout: 0 });
             setReport(res.data);
             setExpanded(true);
             setSuccess(true);
@@ -629,6 +630,15 @@ function AiReportPanel({ days }: { days: number }) {
                             </button>
                         </>
                     )}
+                    <select
+                        value={model}
+                        onChange={e => setModel(e.target.value)}
+                        disabled={loading}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                    >
+                        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                    </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
                         {loading ? 'Generating…' : report ? 'Regenerate' : 'Generate Report'}
@@ -791,8 +801,14 @@ export default function AnalyticsRules() {
                             <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Period</span>
                             <select value={days} onChange={e => setDays(Number(e.target.value))} disabled={loading}
                                 style={{ background: 'none', border: 'none', color: 'var(--pwc-orange)', fontSize: 13, fontWeight: 700, cursor: 'pointer', outline: 'none', padding: '4px 0' }}>
+                                <option value={0.5}>12 Hours</option>
+                                <option value={1}>24 Hours</option>
+                                <option value={2}>48 Hours</option>
+                                <option value={3}>3 Days</option>
                                 <option value={7}>7 Days</option>
+                                <option value={14}>14 Days</option>
                                 <option value={30}>30 Days</option>
+                                <option value={60}>60 Days</option>
                                 <option value={90}>90 Days</option>
                             </select>
                         </div>

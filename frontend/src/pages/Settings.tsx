@@ -5,7 +5,7 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faGear, faTriangleExclamation, faLock, faLightbulb, faShieldHalved,
     faKey, faLink, faBook, faSave, faRefresh,
-    faCircleCheck, faUnlock, faRobot, faEye, faEyeSlash,
+    faCircleCheck, faUnlock, faRobot, faEye, faEyeSlash, faEnvelope,
 } from '@fortawesome/free-solid-svg-icons';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -28,6 +28,11 @@ interface AppConfig {
     AZURE_ANTHROPIC_API_KEY: string;
     AZURE_ANTHROPIC_ENDPOINT: string;
     AZURE_ANTHROPIC_MODEL: string;
+    // Email via Microsoft Graph API
+    GRAPH_MAIL_FROM: string;
+    GRAPH_CLIENT_ID: string;
+    GRAPH_CLIENT_SECRET: string;
+    SENTINEL_COMMENT_WEBHOOK_URL: string;
     // System
     SETTINGS_PASSWORD: string;
     OUTPUT_DIR: string;
@@ -47,7 +52,11 @@ const DEFAULTS: AppConfig = {
     VIRUSTOTAL_API_KEY: '',
     AZURE_ANTHROPIC_API_KEY: '',
     AZURE_ANTHROPIC_ENDPOINT: '',
-    AZURE_ANTHROPIC_MODEL: 'claude-3-5-sonnet-20241022',
+    AZURE_ANTHROPIC_MODEL: 'claude-sonnet-4-6',
+    GRAPH_MAIL_FROM: 'souvik.roy@cpcdemo.in',
+    GRAPH_CLIENT_ID: '',
+    GRAPH_CLIENT_SECRET: '',
+    SENTINEL_COMMENT_WEBHOOK_URL: '',
     SETTINGS_PASSWORD: '',
     OUTPUT_DIR: './reports',
 };
@@ -409,7 +418,31 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
                                 <Field label="Endpoint" fieldKey="AZURE_ANTHROPIC_ENDPOINT" value={cfg.AZURE_ANTHROPIC_ENDPOINT} onChange={set}
                                     placeholder="https://your-resource.services.ai.azure.com" />
                                 <Field label="Model" fieldKey="AZURE_ANTHROPIC_MODEL" value={cfg.AZURE_ANTHROPIC_MODEL} onChange={set}
-                                    placeholder="claude-3-5-sonnet-20241022" />
+                                    placeholder="claude-sonnet-4-6" />
+                            </FieldGroup>
+                        </div>
+
+                        {/* Email Reports via Graph API */}
+                        <div className="card" style={{ marginBottom: 16 }}>
+                            <div className="card-title">
+                                <FontAwesomeIcon icon={faEnvelope} className="card-title-icon" />
+                                Email Reports &amp; Webhooks
+                            </div>
+                            <FieldGroup label="Microsoft Graph Mail">
+                                <Field label="Sender Mailbox (From)" fieldKey="GRAPH_MAIL_FROM" value={cfg.GRAPH_MAIL_FROM} onChange={set}
+                                    placeholder="souvik.roy@cpcdemo.in" />
+                                <Field
+                                    label="Graph Client ID (leave blank to reuse Azure Client ID)"
+                                    fieldKey="GRAPH_CLIENT_ID" value={cfg.GRAPH_CLIENT_ID} onChange={set}
+                                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (optional)" />
+                                <Field
+                                    label="Graph Client Secret (leave blank to reuse Azure Client Secret)"
+                                    fieldKey="GRAPH_CLIENT_SECRET" value={cfg.GRAPH_CLIENT_SECRET} onChange={set}
+                                    secret placeholder="optional override secret" />
+                            </FieldGroup>
+                            <FieldGroup label="Sentinel Comment Webhook">
+                                <Field label="Logic App Webhook URL" fieldKey="SENTINEL_COMMENT_WEBHOOK_URL" value={cfg.SENTINEL_COMMENT_WEBHOOK_URL} onChange={set}
+                                    secret placeholder="https://prod-xx.logic.azure.com/workflows/..." />
                             </FieldGroup>
                         </div>
 
@@ -474,7 +507,10 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
                                     ['Subscription ID', 'SUBSCRIPTION_ID'],
                                     ['IPInfo', 'IPINFO_TOKEN'],
                                     ['AbuseIPDB', 'ABUSEIPDB_TOKEN'],
+                                    ['VirusTotal', 'VIRUSTOTAL_API_KEY'],
                                     ['Anthropic Key', 'AZURE_ANTHROPIC_API_KEY'],
+                                    ['Graph Mail From', 'GRAPH_MAIL_FROM'],
+                                    ['Comment Webhook', 'SENTINEL_COMMENT_WEBHOOK_URL'],
                                 ] as [string, keyof AppConfig][]).map(([label, key]) => (
                                     <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <span style={{ color: 'var(--text-secondary)' }}>{label}</span>

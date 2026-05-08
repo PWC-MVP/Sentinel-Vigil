@@ -394,6 +394,172 @@ async def _complete_anthropic(system: str, user_msg: str, model: str | None = No
     raise RuntimeError(f"Anthropic API rejected all max_tokens budgets. Last error: {last_err}")
 
 
+# ── Streaming single-turn completion (no tool use) ────────────────────────────
+
+async def stream_complete(system: str, user_msg: str, model: str | None = None):
+    """
+    Streaming single-turn completion — yields dicts:
+      {"type":"text",  "text": str}          — each text chunk from the LLM
+      {"type":"usage", "input_tokens": int,
+                       "output_tokens": int, "model": str}  — final event
+    Handles automatic continuation when the model hits max_tokens.
+    """
+    c = _llm_creds()
+    if c["anthropic_key"] and c["anthropic_endpoint"]:
+        async for item in _stream_complete_anthropic(system, user_msg, model=model):
+            yield item
+    elif c["azure_key"] and c["azure_endpoint"]:
+        async for item in _stream_complete_openai_nc(system, user_msg, use_azure=True):
+            yield item
+    elif c["openai_key"]:
+        async for item in _stream_complete_openai_nc(system, user_msg, use_azure=False):
+            yield item
+    else:
+        raise RuntimeError("No LLM provider configured in .env")
+
+
+async def _stream_complete_anthropic(system: str, user_msg: str, model: str | None = None):
+    """Stream Anthropic completion with automatic continuation on max_tokens."""
+    c = _llm_creds()
+    anthropic_model = model or c["anthropic_model"]
+    url = c["anthropic_endpoint"]
+    if "api-version" not in url:
+        url += "?api-version=2024-10-31-preview"
+    headers = {
+        "Authorization": f"Bearer {c['anthropic_key']}",
+        "api-key": c["anthropic_key"],
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+    }
+    max_tok = min(c["anthropic_max_tokens"], 8192)
+    messages = [{"role": "user", "content": user_msg}]
+    full_text = ""
+    total_in = 0
+    total_out = 0
+
+    for _pass in range(4):
+        payload = {
+            "model": anthropic_model,
+            "messages": messages,
+            "system": system,
+            "max_tokens": max_tok,
+            "stream": True,
+        }
+        stop_reason = None
+        pass_text = ""
+
+        async with httpx.AsyncClient() as client:
+            async with client.stream(
+                "POST", url, json=payload, headers=headers, timeout=300.0
+            ) as resp:
+                if resp.status_code != 200:
+                    err = await resp.aread()
+                    raise RuntimeError(
+                        f"Anthropic API {resp.status_code}: {err.decode()[:500]}"
+                    )
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data_str)
+                    except Exception:
+                        continue
+                    e_type = event.get("type")
+                    if e_type == "message_start":
+                        total_in += event.get("message", {}).get("usage", {}).get("input_tokens", 0)
+                    elif e_type == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            chunk = delta["text"]
+                            pass_text += chunk
+                            yield {"type": "text", "text": chunk}
+                    elif e_type == "message_delta":
+                        stop_reason = event.get("delta", {}).get("stop_reason")
+                        total_out += event.get("usage", {}).get("output_tokens", 0)
+
+        full_text += pass_text
+        if stop_reason != "max_tokens" or not pass_text:
+            break
+        logger.info("Anthropic stream_complete: truncated at pass %d, continuing…", _pass + 1)
+        messages = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": full_text},
+            {"role": "user", "content": (
+                "Continue the report exactly where it was cut off. "
+                "Do not add any preamble, heading, or repetition — "
+                "just resume writing from the last incomplete sentence or section."
+            )},
+        ]
+
+    yield {"type": "usage", "input_tokens": total_in, "output_tokens": total_out, "model": anthropic_model}
+
+
+async def _stream_complete_openai_nc(system: str, user_msg: str, *, use_azure: bool):
+    """Stream OpenAI/Azure OpenAI completion with automatic continuation."""
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+    c = _llm_creds()
+    if use_azure:
+        client = AsyncAzureOpenAI(
+            azure_endpoint=c["azure_endpoint"],
+            api_key=c["azure_key"],
+            api_version=c["azure_version"],
+            timeout=300.0,
+        )
+        model = c["azure_deploy"]
+    else:
+        client = AsyncOpenAI(api_key=c["openai_key"], timeout=300.0)
+        model = c["openai_model"]
+
+    total_in = 0
+    total_out = 0
+    full_text = ""
+    base_messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
+
+    for _pass in range(4):
+        msgs = base_messages if _pass == 0 else base_messages + [
+            {"role": "assistant", "content": full_text},
+            {"role": "user", "content": (
+                "Continue the report exactly where it was cut off. "
+                "Do not add any preamble, heading, or repetition — "
+                "just resume writing from the last incomplete sentence or section."
+            )},
+        ]
+        stream = await client.chat.completions.create(
+            model=model,
+            messages=msgs,
+            temperature=0.1,
+            max_tokens=8192,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        pass_text = ""
+        finish_reason = None
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    pass_text += delta.content
+                    yield {"type": "text", "text": delta.content}
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+            if chunk.usage:
+                total_in += chunk.usage.prompt_tokens or 0
+                total_out += chunk.usage.completion_tokens or 0
+
+        full_text += pass_text
+        if finish_reason != "length" or not pass_text:
+            break
+        logger.info("OpenAI stream_complete: truncated at pass %d, continuing…", _pass + 1)
+
+    yield {"type": "usage", "input_tokens": total_in, "output_tokens": total_out, "model": model}
+
+
 async def _complete_openai(system: str, user_msg: str, *, use_azure: bool) -> dict:
     from openai import AsyncAzureOpenAI, AsyncOpenAI, BadRequestError as OAIBadRequest
     c = _llm_creds()

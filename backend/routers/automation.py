@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/automation", tags=["automation"])
 # ── Existing endpoints ────────────────────────────────────────────────────────
 
 @router.get("/overview")
-async def get_automation_overview(days: int = Query(30)):
+async def get_automation_overview(days: float = Query(30)):
     """Playbook run counts and incident classification summary."""
     la_q = f"""
     AzureActivity
@@ -66,7 +66,7 @@ async def get_automation_overview(days: int = Query(30)):
 
 
 @router.get("/playbooks")
-async def get_playbook_stats(days: int = Query(30)):
+async def get_playbook_stats(days: float = Query(30)):
     """Per-playbook execution statistics from AzureActivity."""
     q = f"""
     AzureActivity
@@ -105,7 +105,7 @@ async def get_playbook_stats(days: int = Query(30)):
 
 
 @router.get("/outcomes")
-async def get_incident_outcomes(days: int = Query(30)):
+async def get_incident_outcomes(days: float = Query(30)):
     """Closed incident classification distribution and daily open/close trend."""
     class_q = f"""
     SecurityIncident
@@ -156,7 +156,7 @@ async def get_incident_outcomes(days: int = Query(30)):
 
 
 @router.get("/soar-actions")
-async def get_soar_actions(days: int = Query(30)):
+async def get_soar_actions(days: float = Query(30)):
     """Automation rule owner-assignment and labeling outcomes per incident status."""
     q = f"""
     SecurityIncident
@@ -359,7 +359,7 @@ async def get_automation_rules():
 
 
 @router.get("/failures")
-async def get_failure_details(days: int = Query(30)):
+async def get_failure_details(days: float = Query(30)):
     """
     Detailed failure analysis: top failing playbooks, daily failure trend,
     and failure reason patterns from AzureActivity and AzureDiagnostics.
@@ -452,7 +452,7 @@ async def get_failure_details(days: int = Query(30)):
 # ── LLM Report ────────────────────────────────────────────────────────────────
 
 @router.get("/report")
-async def generate_automation_report(days: int = Query(30)):
+async def generate_automation_report(days: float = Query(30), model: str | None = Query(None)):
     """
     Generate a comprehensive LLM-powered Automation & SOAR report.
     Gathers data from all available sources and uses the LLM to produce
@@ -720,7 +720,7 @@ Be precise and evidence-based. Every finding must reference specific numbers fro
 
     token_usage: dict = {}
     try:
-        result       = await llm_service.complete(system_prompt, context)
+        result       = await llm_service.complete(system_prompt, context, model=model)
         llm_analysis = result["text"]
         token_usage  = result["usage"]
     except Exception as e:

@@ -6,7 +6,7 @@ import {
     faArrowTrendDown, faFilePdf, faFileCode, faRefresh,
     faList, faRobot, faSearch, faFilter, faRepeat,
     faWandMagicSparkles, faCircleCheck, faCircleXmark,
-    faAngleDown,
+    faAngleDown, faEnvelope, faBolt, faCommentDots, faPaperPlane,
 } from '@fortawesome/free-solid-svg-icons';
 import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 
@@ -29,6 +29,18 @@ interface Recurrence {
     title: string; count: number; last_seen: string; first_seen: string;
     avg_mttr: number; severities: string[]; open_count: number;
 }
+interface PriorityIncident extends Incident {
+    priority_score: number;
+    priority_reason: string;
+}
+
+const PRIORITY_META: Record<number, [string, string]> = {
+    5: ['P5 Critical', '#C0392B'],
+    4: ['P4 High',     '#E67E22'],
+    3: ['P3 Medium',   '#F39C12'],
+    2: ['P2 Low',      '#27AE60'],
+    1: ['P1 Minimal',  '#7F8C8D'],
+};
 
 type TabId = 'mttr' | 'trends' | 'owners' | 'sla' | 'incidents' | 'ai';
 
@@ -206,8 +218,11 @@ type AlertDetail = {
     provider: string; tactics: string; entities: EntityDetail[]; extended: string;
 };
 
+interface HuntSection { label: string; query_type: string; rows: Record<string, unknown>[]; row_count: number; }
+interface HuntResult { sections: HuntSection[]; total_records: number; days: number; incident_number: number; }
+
 function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClose: () => void }) {
-    type ModalTab = 'details' | 'entities' | 'alerts' | 'ai';
+    type ModalTab = 'details' | 'entities' | 'alerts' | 'ai' | 'hunt';
     const [modalTab, setModalTab]       = useState<ModalTab>('details');
     const [detailsData, setDetailsData] = useState<{
         entities: EntityDetail[];
@@ -220,6 +235,12 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
     const [analyzing, setAnalyzing]   = useState(false);
     const [analysis, setAnalysis]     = useState('');
     const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+    const [addingComment, setAddingComment] = useState(false);
+    const [commentResult, setCommentResult] = useState<{ ok: boolean; msg: string } | null>(null);
+    const [huntDays, setHuntDays]     = useState(7);
+    const [huntLoading, setHuntLoading] = useState(false);
+    const [huntError, setHuntError]   = useState<string | null>(null);
+    const [huntData, setHuntData]     = useState<HuntResult | null>(null);
 
     const tacticStr = (t: unknown): string =>
         Array.isArray(t) ? (t as string[]).join(', ') : String(t ?? '');
@@ -250,6 +271,44 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
         }
     };
 
+    const handleAddEnrichmentComment = async () => {
+        setAddingComment(true);
+        setCommentResult(null);
+        try {
+            const res = await axios.post(
+                `/api/incident-analytics/incidents/${incident.number}/add-enrichment-comment`,
+                {
+                    entities: detailsData?.entities ?? [],
+                    title: incident.title,
+                    severity: incident.severity,
+                },
+                { timeout: 0 },
+            );
+            setCommentResult({ ok: true, msg: res.data.message || 'Analysis posted as Sentinel comment' });
+        } catch (e: any) {
+            setCommentResult({ ok: false, msg: e.response?.data?.detail || e.message || 'Failed to post comment' });
+        } finally {
+            setAddingComment(false);
+        }
+    };
+
+    const handleHunt = async () => {
+        setHuntLoading(true);
+        setHuntError(null);
+        try {
+            const res = await axios.post(
+                `/api/incident-analytics/incidents/${incident.number}/investigate`,
+                { entities: detailsData?.entities ?? [], days: huntDays },
+                { timeout: 0 },
+            );
+            setHuntData(res.data);
+        } catch (e: any) {
+            setHuntError(e.response?.data?.detail || e.message || 'Investigation failed');
+        } finally {
+            setHuntLoading(false);
+        }
+    };
+
     const ENTITY_ICON: Record<string, string> = {
         account: '👤', ip: '🌐', host: '💻', url: '🔗', uri: '🔗',
         file: '📄', process: '⚙️', mailbox: '📧', mailmessage: '✉️',
@@ -277,6 +336,7 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
         { id: 'details',  label: 'Details' },
         { id: 'entities', label: `Entities${detailsData ? ` (${detailsData.entities.length})` : ''}` },
         { id: 'alerts',   label: `Alerts${detailsData ? ` (${detailsData.alerts.length})` : ''}` },
+        { id: 'hunt',     label: 'Hunt & Investigate' },
         { id: 'ai',       label: 'AI Analysis' },
     ];
 
@@ -583,6 +643,125 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
                         )
                     )}
 
+                    {/* ── Hunt & Investigate tab ────────────────────── */}
+                    {modalTab === 'hunt' && (
+                        <div>
+                            {/* Controls */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                                <div style={{ fontWeight: 700, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-primary)' }}>
+                                    <FontAwesomeIcon icon={faSearch} style={{ color: 'var(--brand)' }} />
+                                    Hunting &amp; Investigation
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                    <select
+                                        value={huntDays}
+                                        onChange={e => setHuntDays(Number(e.target.value))}
+                                        style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer' }}
+                                    >
+                                        <option value={3}>Last 3 days</option>
+                                        <option value={7}>Last 7 days</option>
+                                        <option value={14}>Last 14 days</option>
+                                        <option value={30}>Last 30 days</option>
+                                    </select>
+                                    <button
+                                        onClick={handleHunt}
+                                        disabled={huntLoading}
+                                        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, background: huntLoading ? 'rgba(208,74,2,0.08)' : 'var(--pwc-orange,var(--brand))', border: huntLoading ? '1px solid var(--brand)' : 'none', color: huntLoading ? 'var(--brand)' : '#fff', fontSize: 12, fontWeight: 700, cursor: huntLoading ? 'default' : 'pointer' }}
+                                    >
+                                        {huntLoading
+                                            ? <><span className="spinner" style={{ width: 12, height: 12 }} /> Running queries…</>
+                                            : <><FontAwesomeIcon icon={faSearch} /> Run Investigation</>
+                                        }
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Intro */}
+                            {!huntData && !huntLoading && !huntError && (
+                                <div style={{ padding: '20px 18px', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.9 }}>
+                                    <div style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>Runs targeted KQL queries against your workspace based on incident entities:</div>
+                                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                        <li><strong>Account entities</strong> — Sign-in logs (UPN, failed/successful auth, risk, location) + Azure AD audit events</li>
+                                        <li><strong>IP entities</strong> — CommonSecurityLog network traffic + sign-ins originating from that IP</li>
+                                        <li><strong>Host entities</strong> — Windows Security Events (logons 4624/4625, process creation 4688, service install 7045) + MDE DeviceProcessEvents</li>
+                                        <li><strong>All incidents</strong> — Related Security Alerts linked via AlertIds</li>
+                                    </ul>
+                                </div>
+                            )}
+
+                            {huntError && (
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--critical)', fontSize: 12, padding: '10px 14px', background: 'rgba(192,57,43,0.06)', borderRadius: 7 }}>
+                                    <FontAwesomeIcon icon={faCircleXmark} /> {huntError}
+                                </div>
+                            )}
+
+                            {huntData && (
+                                <div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                        {huntData.total_records > 0
+                                            ? <><FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--low)' }} /> Found <strong>{huntData.total_records}</strong> records across <strong>{huntData.sections.length}</strong> query result{huntData.sections.length !== 1 ? 's' : ''} (last {huntData.days}d)</>
+                                            : <><FontAwesomeIcon icon={faCircleXmark} style={{ color: 'var(--text-muted)' }} /> No investigation data found in the last {huntData.days} days. Try a longer time range or verify entity data.</>
+                                        }
+                                    </div>
+                                    {huntData.sections.map((section, si) => {
+                                        const cols = section.rows.length > 0 ? Object.keys(section.rows[0]) : [];
+                                        const qColor: Record<string, string> = {
+                                            signin: '#7C3AED', audit: '#1E40AF', network: '#0891B2',
+                                            host: '#D97706', process: '#B45309', alerts: '#DC2626',
+                                        };
+                                        const accent = qColor[section.query_type] ?? 'var(--brand)';
+                                        return (
+                                            <div key={si} style={{ marginBottom: 10, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                                                <div style={{ padding: '9px 14px', background: 'var(--bg-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+                                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 600, fontSize: 12, color: 'var(--text-primary)' }}>
+                                                        <FontAwesomeIcon icon={faList} style={{ color: accent, fontSize: 10 }} />
+                                                        {section.label}
+                                                    </div>
+                                                    <span style={{ background: accent, color: '#fff', borderRadius: 10, padding: '1px 9px', fontSize: 11, fontWeight: 700 }}>
+                                                        {section.row_count}
+                                                    </span>
+                                                </div>
+                                                <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
+                                                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                                                        <thead>
+                                                            <tr>
+                                                                {cols.map(col => (
+                                                                    <th key={col} style={{ padding: '5px 10px', textAlign: 'left', background: 'var(--bg-hover)', color: 'var(--text-muted)', fontWeight: 600, borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 1 }}>
+                                                                        {col}
+                                                                    </th>
+                                                                ))}
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {section.rows.map((row, ri) => (
+                                                                <tr key={ri} style={{ background: ri % 2 === 0 ? 'transparent' : 'rgba(0,0,0,0.02)', borderBottom: '1px solid var(--bg-hover)' }}>
+                                                                    {cols.map(col => {
+                                                                        const val = row[col];
+                                                                        let display = val == null ? '—' : String(val);
+                                                                        const full = display;
+                                                                        if (col.toLowerCase().includes('time') && display && display !== '—') {
+                                                                            try { display = new Date(display).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }); } catch { /* keep original */ }
+                                                                        }
+                                                                        if (display.length > 80) display = display.slice(0, 80) + '…';
+                                                                        return (
+                                                                            <td key={col} title={full} style={{ padding: '4px 10px', color: 'var(--text-secondary)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                                {display}
+                                                                            </td>
+                                                                        );
+                                                                    })}
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* ── AI Analysis tab ───────────────────────────── */}
                     {modalTab === 'ai' && (
                         <div>
@@ -610,6 +789,35 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
                                         dangerouslySetInnerHTML={{ __html: renderMd(analysis) }} />
                                 </div>
                             )}
+
+                            {/* ── Post Enrichment + AI Analysis as Sentinel Comment ── */}
+                            <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', marginBottom: 6 }}>
+                                    <FontAwesomeIcon icon={faCommentDots} style={{ color: '#1E40AF' }} />
+                                    Post to Sentinel as Comment
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.6 }}>
+                                    Runs VT + AbuseIPDB enrichment on all entities and generates a Tier-3 AI investigation brief, then posts the full analysis as a formatted comment directly to this Sentinel incident.
+                                </div>
+                                {commentResult ? (
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, padding: '10px 14px', borderRadius: 8, background: commentResult.ok ? 'rgba(39,174,96,0.08)' : 'rgba(192,57,43,0.08)', color: commentResult.ok ? 'var(--low)' : 'var(--critical)' }}>
+                                        <FontAwesomeIcon icon={commentResult.ok ? faCircleCheck : faCircleXmark} />
+                                        <span style={{ flex: 1 }}>{commentResult.msg}</span>
+                                        <button onClick={() => setCommentResult(null)} style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontSize: 11, color: 'var(--text-muted)' }}>Reset</button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        disabled={addingComment}
+                                        onClick={handleAddEnrichmentComment}
+                                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 18px', borderRadius: 8, background: addingComment ? 'rgba(30,64,175,0.08)' : '#1E40AF', border: addingComment ? '1px solid #1E40AF' : 'none', color: addingComment ? '#1E40AF' : '#fff', fontSize: 13, fontWeight: 700, cursor: addingComment ? 'default' : 'pointer' }}
+                                    >
+                                        {addingComment
+                                            ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Enriching &amp; generating brief…</>
+                                            : <><FontAwesomeIcon icon={faPaperPlane} /> Post Enrichment + AI Analysis as Sentinel Comment</>
+                                        }
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     )}
                 </div>
@@ -640,6 +848,22 @@ export default function IncidentAnalytics() {
     const [sevFilter, setSevFilter] = useState('all');
 
     const [incidentsError, setIncidentsError] = useState<string | null>(null);
+
+    // Priority analysis
+    const [priorityRanked, setPriorityRanked] = useState<PriorityIncident[]>([]);
+    const [priorityLoading, setPriorityLoading] = useState(false);
+    const [priorityError, setPriorityError] = useState<string | null>(null);
+
+    // Email report
+    const [emailModalOpen, setEmailModalOpen] = useState(false);
+    const [emailRecipients, setEmailRecipients] = useState('');
+    const [emailAppUrl, setEmailAppUrl] = useState(() => window.location.origin);
+    const [emailIncludeEnrichment, setEmailIncludeEnrichment] = useState(true);
+    const [emailIncludeLlm, setEmailIncludeLlm] = useState(true);
+    const [emailSelectedNumbers, setEmailSelectedNumbers] = useState<Set<number>>(new Set());
+    const [emailIncidentFilter, setEmailIncidentFilter] = useState('');
+    const [emailSending, setEmailSending] = useState(false);
+    const [emailResult, setEmailResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
     // AI Assessment
     const [aiLoading, setAiLoading] = useState(false);
@@ -726,6 +950,12 @@ export default function IncidentAnalytics() {
     const openCount   = useMemo(() => incidents.filter(i => ['Active', 'New'].includes(i.status)).length, [incidents]);
     const closedCount = useMemo(() => incidents.filter(i => i.status === 'Closed').length, [incidents]);
 
+    const priorityMap = useMemo(() => {
+        const m: Record<number, { score: number; reason: string }> = {};
+        for (const inc of priorityRanked) m[inc.number] = { score: inc.priority_score, reason: inc.priority_reason };
+        return m;
+    }, [priorityRanked]);
+
     const runAiAssessment = async () => {
         setAiLoading(true);
         setAiSuccess(null);
@@ -748,6 +978,54 @@ export default function IncidentAnalytics() {
             setAiSuccess(false);
         } finally {
             setAiLoading(false);
+        }
+    };
+
+    const handleRunPriorityAnalysis = async () => {
+        setPriorityLoading(true);
+        setPriorityError(null);
+        try {
+            const res = await axios.post(
+                '/api/incident-analytics/priority-ranking',
+                { incidents: filteredIncidents },
+                { timeout: 0 },
+            );
+            setPriorityRanked(res.data.ranked || []);
+        } catch (e: any) {
+            setPriorityError(e.response?.data?.detail || e.message || 'Priority analysis failed');
+        } finally {
+            setPriorityLoading(false);
+        }
+    };
+
+    const handleSendEmail = async () => {
+        const recipients = emailRecipients.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
+        if (!recipients.length) {
+            setEmailResult({ ok: false, msg: 'Please enter at least one recipient email address' });
+            return;
+        }
+        if (emailSelectedNumbers.size === 0) {
+            setEmailResult({ ok: false, msg: 'Please select at least one incident to include' });
+            return;
+        }
+        setEmailSending(true);
+        setEmailResult(null);
+        try {
+            const res = await axios.post('/api/incident-analytics/send-email-report', {
+                days,
+                to: recipients,
+                app_url: emailAppUrl,
+                include_enrichment: emailIncludeEnrichment,
+                include_llm: emailIncludeLlm,
+                incident_numbers: Array.from(emailSelectedNumbers),
+                max_incidents: 200,
+            }, { timeout: 0 });
+            const llmNote = res.data.llm_error ? ` (LLM briefs failed: ${res.data.llm_error})` : res.data.llm_briefs > 0 ? ` · ${res.data.llm_briefs} AI briefs generated` : '';
+            setEmailResult({ ok: !res.data.llm_error, msg: `Report sent to ${res.data.recipients?.join(', ')} — ${res.data.incident_count} incidents included${llmNote}` });
+        } catch (e: any) {
+            setEmailResult({ ok: false, msg: e.response?.data?.detail || e.message || 'Email send failed' });
+        } finally {
+            setEmailSending(false);
         }
     };
 
@@ -817,6 +1095,15 @@ export default function IncidentAnalytics() {
                         <div className="page-subtitle">Comprehensive incident overview — MTTR, SLA, trends, owner workload, and AI recommendations</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <button className="btn btn-sm btn-ghost" onClick={() => {
+                            setEmailModalOpen(true);
+                            setEmailResult(null);
+                            setEmailIncidentFilter('');
+                            setEmailSelectedNumbers(new Set(incidents.map(i => i.number)));
+                        }} disabled={loading}
+                            style={{ background: 'rgba(30,64,175,0.08)', border: '1px solid rgba(30,64,175,0.25)', color: '#1E40AF' }}>
+                            <FontAwesomeIcon icon={faEnvelope} /> Send Email Report
+                        </button>
                         <button className="btn btn-sm btn-ghost" onClick={() => handleExport('html')} disabled={isExporting || loading}>
                             <FontAwesomeIcon icon={faFileCode} style={{ color: 'var(--info)' }} /> HTML
                         </button>
@@ -830,8 +1117,14 @@ export default function IncidentAnalytics() {
                             <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Period</span>
                             <select value={days} onChange={e => setDays(Number(e.target.value))} disabled={loading}
                                 style={{ background: 'none', border: 'none', color: 'var(--pwc-orange)', fontSize: 13, fontWeight: 700, cursor: 'pointer', outline: 'none', padding: '4px 0' }}>
+                                <option value={0.5}>12 Hours</option>
+                                <option value={1}>24 Hours</option>
+                                <option value={2}>48 Hours</option>
+                                <option value={3}>3 Days</option>
                                 <option value={7}>7 Days</option>
+                                <option value={14}>14 Days</option>
                                 <option value={30}>30 Days</option>
+                                <option value={60}>60 Days</option>
                                 <option value={90}>90 Days</option>
                             </select>
                         </div>
@@ -1117,7 +1410,62 @@ export default function IncidentAnalytics() {
                                     <div style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
                                         Showing {filteredIncidents.length} of {incidents.length}
                                     </div>
+                                    {/* Priority Analysis button */}
+                                    <button
+                                        onClick={handleRunPriorityAnalysis}
+                                        disabled={priorityLoading || filteredIncidents.length === 0}
+                                        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 14px', borderRadius: 20, border: '1px solid var(--border)', background: priorityRanked.length > 0 ? 'rgba(192,57,43,0.06)' : 'var(--bg-card)', color: 'var(--text-secondary)', fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
+                                        <FontAwesomeIcon icon={priorityLoading ? faRefresh : faBolt} spin={priorityLoading} style={{ color: priorityRanked.length > 0 ? 'var(--critical)' : 'var(--text-muted)' }} />
+                                        {priorityLoading ? 'Analyzing…' : priorityRanked.length > 0 ? 'Re-run Priority' : 'Run Priority Analysis'}
+                                    </button>
                                 </div>
+
+                                {/* Priority Analysis error */}
+                                {priorityError && (
+                                    <div style={{ background: 'rgba(192,57,43,0.08)', border: '1px solid rgba(192,57,43,0.3)', borderRadius: 8, padding: '10px 16px', fontSize: 12, color: 'var(--critical)', display: 'flex', gap: 8, alignItems: 'center' }}>
+                                        <FontAwesomeIcon icon={faCircleXmark} /> {priorityError}
+                                        <button onClick={() => setPriorityError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: 'var(--text-muted)' }}>✕</button>
+                                    </div>
+                                )}
+
+                                {/* Priority Queue — shown when analysis is run */}
+                                {priorityRanked.length > 0 && (
+                                    <div className="card" style={{ padding: 0, border: '1px solid rgba(208,74,2,0.25)', background: 'linear-gradient(135deg,rgba(208,74,2,0.02) 0%,transparent 100%)' }}>
+                                        <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                            <FontAwesomeIcon icon={faBolt} style={{ color: 'var(--critical)', fontSize: 13 }} />
+                                            <span style={{ fontWeight: 700, fontSize: 13 }}>AI Priority Queue</span>
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>LLM-scored incidents — click to open details</span>
+                                            <button onClick={() => setPriorityRanked([])} style={{ marginLeft: 'auto', background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontSize: 11, color: 'var(--text-muted)' }}>Clear</button>
+                                        </div>
+                                        <div style={{ overflow: 'auto', maxHeight: 340 }}>
+                                            {priorityRanked.filter(i => i.priority_score >= 4).slice(0, 12).map((inc, idx) => {
+                                                const [plabel, pcolor] = PRIORITY_META[inc.priority_score] ?? ['P3', '#F39C12'];
+                                                return (
+                                                    <div key={idx}
+                                                        style={{ padding: '10px 18px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'flex-start', cursor: 'pointer', transition: 'background 0.1s' }}
+                                                        onClick={() => setSelectedIncident(inc)}
+                                                        onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-base)')}
+                                                        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                                                        <span style={{ background: pcolor + '22', color: pcolor, fontSize: 10, fontWeight: 800, padding: '3px 10px', borderRadius: 20, whiteSpace: 'nowrap', flexShrink: 0, marginTop: 1 }}>{plabel}</span>
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inc.title}</div>
+                                                            {inc.priority_reason && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.4 }}>{inc.priority_reason}</div>}
+                                                        </div>
+                                                        <span style={{ fontSize: 11, fontWeight: 700, color: sevColor(inc.severity), background: sevBg(inc.severity), padding: '2px 8px', borderRadius: 10, flexShrink: 0 }}>{inc.severity}</span>
+                                                    </div>
+                                                );
+                                            })}
+                                            {priorityRanked.filter(i => i.priority_score >= 4).length === 0 && (
+                                                <div style={{ padding: '20px 18px', fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>No P4/P5 incidents detected in the current view.</div>
+                                            )}
+                                            {priorityRanked.filter(i => i.priority_score < 4).length > 0 && (
+                                                <div style={{ padding: '8px 18px', fontSize: 11, color: 'var(--text-muted)', borderTop: '1px dashed var(--border)', fontStyle: 'italic' }}>
+                                                    + {priorityRanked.filter(i => i.priority_score < 4).length} P1–P3 incidents not shown (lower priority)
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
 
                                 {/* Error banner */}
                                 {incidentsError && (
@@ -1152,6 +1500,7 @@ export default function IncidentAnalytics() {
                                                         <th style={{ width: 80 }}>MTTR</th>
                                                         <th style={{ width: 120 }}>Tactics</th>
                                                         <th style={{ width: 120 }}>Classification</th>
+                                                        {priorityRanked.length > 0 && <th style={{ width: 100 }}>Priority</th>}
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1203,6 +1552,18 @@ export default function IncidentAnalytics() {
                                                                 {tacticStr(inc.tactics) || '—'}
                                                             </td>
                                                             <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{inc.classification || '—'}</td>
+                                                            {priorityRanked.length > 0 && (() => {
+                                                                const p = priorityMap[inc.number];
+                                                                if (!p) return <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>—</td>;
+                                                                const [plabel, pcolor] = PRIORITY_META[p.score] ?? ['?', '#7F8C8D'];
+                                                                return (
+                                                                    <td title={p.reason || ''}>
+                                                                        <span style={{ background: pcolor + '22', color: pcolor, fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 10, whiteSpace: 'nowrap' }}>
+                                                                            {plabel}
+                                                                        </span>
+                                                                    </td>
+                                                                );
+                                                            })()}
                                                         </tr>
                                                     ))}
                                                 </tbody>
@@ -1328,6 +1689,156 @@ export default function IncidentAnalytics() {
                 incident={selectedIncident}
                 onClose={() => setSelectedIncident(null)}
             />
+        )}
+
+        {/* ── Email Report Modal ─────────────────────────────────────── */}
+        {emailModalOpen && (
+            <div
+                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.48)', backdropFilter: 'blur(3px)', zIndex: 1001, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                onClick={() => { setEmailModalOpen(false); setEmailResult(null); }}
+            >
+                <div
+                    style={{ background: 'var(--bg-card)', borderRadius: 12, padding: 28, width: 600, maxWidth: '94vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 48px rgba(0,0,0,0.35)', animation: 'fadeIn 0.2s ease' }}
+                    onClick={e => e.stopPropagation()}
+                >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontWeight: 800, fontSize: 15, color: 'var(--text-primary)' }}>
+                            <FontAwesomeIcon icon={faEnvelope} style={{ color: '#1E40AF' }} />
+                            Send Incident Priority Report
+                        </div>
+                        <button onClick={() => { setEmailModalOpen(false); setEmailResult(null); }}
+                            style={{ background: 'none', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)' }}>✕</button>
+                    </div>
+
+                    {/* Incident Selector */}
+                    <div style={{ marginBottom: 16 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                                Incidents to include
+                                <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: emailSelectedNumbers.size === 0 ? 'var(--critical)' : '#1E40AF', background: emailSelectedNumbers.size === 0 ? 'rgba(192,57,43,0.08)' : 'rgba(30,64,175,0.08)', borderRadius: 10, padding: '1px 8px', textTransform: 'none', letterSpacing: 0 }}>
+                                    {emailSelectedNumbers.size} / {incidents.length} selected
+                                </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 6 }}>
+                                <button onClick={() => setEmailSelectedNumbers(new Set(incidents.map(i => i.number)))}
+                                    style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-base)', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                                    All
+                                </button>
+                                <button onClick={() => setEmailSelectedNumbers(new Set())}
+                                    style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-base)', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+                                    None
+                                </button>
+                            </div>
+                        </div>
+                        <input
+                            value={emailIncidentFilter}
+                            onChange={e => setEmailIncidentFilter(e.target.value)}
+                            placeholder="Filter by title or number…"
+                            style={{ width: '100%', marginBottom: 8, border: '1px solid var(--border)', borderRadius: 8, padding: '7px 12px', fontSize: 12, background: 'var(--bg-base)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                        <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-base)' }}>
+                            {incidents.length === 0 ? (
+                                <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>No incidents loaded for this period</div>
+                            ) : incidents.filter(i =>
+                                !emailIncidentFilter ||
+                                String(i.number).includes(emailIncidentFilter) ||
+                                i.title.toLowerCase().includes(emailIncidentFilter.toLowerCase())
+                            ).map(inc => {
+                                const checked = emailSelectedNumbers.has(inc.number);
+                                const sevColor: Record<string, string> = { High: '#C0392B', Medium: '#E67E22', Low: '#27AE60', Informational: '#2980B9' };
+                                return (
+                                    <label key={inc.number} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', cursor: 'pointer', background: checked ? 'rgba(30,64,175,0.04)' : 'transparent' }}>
+                                        <input
+                                            type="checkbox" checked={checked}
+                                            onChange={() => {
+                                                const next = new Set(emailSelectedNumbers);
+                                                if (checked) next.delete(inc.number); else next.add(inc.number);
+                                                setEmailSelectedNumbers(next);
+                                            }}
+                                            style={{ width: 14, height: 14, flexShrink: 0, accentColor: '#1E40AF', cursor: 'pointer' }}
+                                        />
+                                        <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: sevColor[inc.severity] || '#7F8C8D', borderRadius: 4, padding: '1px 6px', flexShrink: 0 }}>{inc.severity[0]}</span>
+                                        <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0, fontFamily: 'monospace' }}>#{inc.number}</span>
+                                        <span style={{ fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inc.title}</span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Recipients */}
+                    <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>Recipients</div>
+                        <textarea
+                            value={emailRecipients}
+                            onChange={e => setEmailRecipients(e.target.value)}
+                            placeholder="analyst@company.com, manager@company.com"
+                            style={{ width: '100%', height: 64, border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px', fontSize: 12, resize: 'vertical', background: 'var(--bg-base)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                    </div>
+
+                    {/* App URL */}
+                    <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
+                            App URL <span style={{ fontSize: 10, fontWeight: 400, textTransform: 'none' }}>(used for email action buttons)</span>
+                        </div>
+                        <input
+                            value={emailAppUrl}
+                            onChange={e => setEmailAppUrl(e.target.value)}
+                            style={{ width: '100%', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 12, background: 'var(--bg-base)', color: 'var(--text-primary)', outline: 'none', boxSizing: 'border-box' }}
+                        />
+                    </div>
+
+                    {/* Options */}
+                    <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <input
+                                type="checkbox" id="emailLlm" checked={emailIncludeLlm}
+                                onChange={e => setEmailIncludeLlm(e.target.checked)}
+                                style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--brand)' }}
+                            />
+                            <label htmlFor="emailLlm" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none', lineHeight: 1.4 }}>
+                                Include AI (LLM) analysis briefs per incident <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>(one batched call)</span>
+                            </label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <input
+                                type="checkbox" id="emailEnr" checked={emailIncludeEnrichment}
+                                onChange={e => setEmailIncludeEnrichment(e.target.checked)}
+                                style={{ width: 15, height: 15, cursor: 'pointer', accentColor: 'var(--brand)' }}
+                            />
+                            <label htmlFor="emailEnr" style={{ fontSize: 13, color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none', lineHeight: 1.4 }}>
+                                Include VT + AbuseIPDB enrichment for P4/P5 incidents <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>(slower but more detailed)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* Result message */}
+                    {emailResult && (
+                        <div style={{ marginBottom: 14, display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12, padding: '10px 14px', borderRadius: 8, background: emailResult.ok ? 'rgba(39,174,96,0.08)' : 'rgba(192,57,43,0.08)', color: emailResult.ok ? 'var(--low)' : 'var(--critical)', border: `1px solid ${emailResult.ok ? 'rgba(39,174,96,0.2)' : 'rgba(192,57,43,0.2)'}` }}>
+                            <FontAwesomeIcon icon={emailResult.ok ? faCircleCheck : faCircleXmark} style={{ marginTop: 1, flexShrink: 0 }} />
+                            <span>{emailResult.msg}</span>
+                        </div>
+                    )}
+
+                    {/* Action buttons */}
+                    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                        <button onClick={() => { setEmailModalOpen(false); setEmailResult(null); }}
+                            style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 8, padding: '9px 18px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                            Cancel
+                        </button>
+                        <button
+                            disabled={emailSending}
+                            onClick={handleSendEmail}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, background: emailSending ? 'rgba(30,64,175,0.08)' : '#1E40AF', border: emailSending ? '1px solid #1E40AF' : 'none', color: emailSending ? '#1E40AF' : '#fff', borderRadius: 8, padding: '9px 22px', fontSize: 13, fontWeight: 700, cursor: emailSending ? 'default' : 'pointer' }}>
+                            {emailSending
+                                ? <><span className="spinner" style={{ width: 14, height: 14 }} /> Sending…</>
+                                : <><FontAwesomeIcon icon={faEnvelope} /> Send Report</>
+                            }
+                        </button>
+                    </div>
+                </div>
+            </div>
         )}
         </>
     );

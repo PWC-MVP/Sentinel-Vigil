@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
@@ -218,20 +218,84 @@ function AiReportPanel({ days }: { days: number }) {
     const [loading, setLoading] = useState(false);
     const [success, setSuccess] = useState<boolean | null>(null);
     const [report, setReport] = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
+    const [streamingText, setStreamingText] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState(true);
+    const [model, setModel] = useState('claude-sonnet-4-6');
+    const abortRef = useRef<AbortController | null>(null);
 
     const generate = async () => {
-        setLoading(true); setError(null); setReport(null); setSuccess(null);
+        if (abortRef.current) abortRef.current.abort();
+        const ctrl = new AbortController();
+        abortRef.current = ctrl;
+
+        setLoading(true); setError(null); setReport(null); setStreamingText(null); setSuccess(null);
+
+        let accumulated = '';
+        let reportFinalized = false;
         try {
-            const res = await axios.get(`/api/dcr/report?days=${days}`, { timeout: 0 });
-            setReport(res.data);
-            setExpanded(true);
-            setSuccess(true);
+            const response = await fetch(`/api/dcr/report?days=${days}&model=${model}`, {
+                signal: ctrl.signal,
+            });
+            if (!response.ok || !response.body) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                // Split on SSE line boundaries — each event ends with \n\n
+                const parts = buf.split('\n\n');
+                buf = parts.pop() ?? '';
+                for (const part of parts) {
+                    for (const line of part.split('\n')) {
+                        if (!line.startsWith('data: ')) continue;
+                        const raw = line.slice(6).trim();
+                        if (!raw) continue;
+                        let evt: any;
+                        try { evt = JSON.parse(raw); } catch { continue; }
+                        if (evt.type === 'token') {
+                            accumulated += evt.text as string;
+                            setStreamingText(accumulated);
+                        } else if (evt.type === 'done') {
+                            reportFinalized = true;
+                            setReport({
+                                llm_analysis: accumulated,
+                                generated_at: evt.generated_at ?? new Date().toISOString(),
+                                token_usage: evt.token_usage,
+                            });
+                            setStreamingText(null);
+                            setExpanded(true);
+                            setSuccess(true);
+                        } else if (evt.type === 'error') {
+                            throw new Error(evt.msg as string || 'LLM analysis failed');
+                        }
+                        // 'progress' events are visual-only — handled by ReportLogPanel timers
+                    }
+                }
+            }
+
+            // Fallback: stream closed without a 'done' event (e.g. connection reset)
+            if (accumulated && !reportFinalized) {
+                setReport({ llm_analysis: accumulated, generated_at: new Date().toISOString() });
+                setStreamingText(null);
+                setExpanded(true);
+                setSuccess(true);
+            }
         } catch (e: any) {
-            setError(e.response?.data?.detail || e.message || 'Report generation failed');
+            if (e.name === 'AbortError') return;
+            setError(e.message || 'Report generation failed');
             setSuccess(false);
-        } finally { setLoading(false); }
+        } finally {
+            setLoading(false);
+            setStreamingText(null);
+        }
     };
 
     const exportHtml = async () => {
@@ -286,6 +350,15 @@ function AiReportPanel({ days }: { days: number }) {
                             </button>
                         </>
                     )}
+                    <select
+                        value={model}
+                        onChange={e => setModel(e.target.value)}
+                        disabled={loading}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                    >
+                        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                    </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
                         {loading ? 'Generating…' : report ? 'Regenerate' : 'Generate Report'}
@@ -298,6 +371,18 @@ function AiReportPanel({ days }: { days: number }) {
             {error && (
                 <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, fontSize: 12, color: 'var(--critical)' }}>
                     <FontAwesomeIcon icon={faCircleXmark} style={{ marginRight: 8 }} />{error}
+                </div>
+            )}
+
+            {/* Live streaming preview — shown while the LLM is generating */}
+            {loading && streamingText && (
+                <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+                        <div className="spinner" style={{ width: 12, height: 12 }} />
+                        Streaming response…
+                    </div>
+                    <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: '20px 24px', lineHeight: 1.7 }}
+                        dangerouslySetInnerHTML={{ __html: markdownToHtml(streamingText) }} />
                 </div>
             )}
 
@@ -456,7 +541,15 @@ export default function DcrAssessment() {
                         onChange={e => setDays(+e.target.value)}
                         style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', color: 'var(--text-primary)', fontSize: 12 }}
                     >
-                        {[7, 14, 30, 60, 90].map(d => <option key={d} value={d}>Last {d} days</option>)}
+                        <option value={0.5}>Last 12 hours</option>
+                        <option value={1}>Last 24 hours</option>
+                        <option value={2}>Last 48 hours</option>
+                        <option value={3}>Last 3 days</option>
+                        <option value={7}>Last 7 days</option>
+                        <option value={14}>Last 14 days</option>
+                        <option value={30}>Last 30 days</option>
+                        <option value={60}>Last 60 days</option>
+                        <option value={90}>Last 90 days</option>
                     </select>
                     <button className="btn btn-sm btn-ghost" onClick={fetchData} disabled={loading}>
                         <FontAwesomeIcon icon={faRefresh} spin={loading} />

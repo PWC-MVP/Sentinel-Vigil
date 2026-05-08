@@ -68,6 +68,7 @@ export default function ThreatHunting() {
     const [reportLoading, setReportLoading]   = useState(false);
     const [reportSuccess, setReportSuccess]   = useState<boolean | null>(null);
     const [reportError, setReportError]       = useState<string | null>(null);
+    const [reportModel, setReportModel]       = useState('claude-sonnet-4-6');
     const [huntAnalyses, setHuntAnalyses]     = useState<Record<string, HuntAnalysis>>({});
     const [analyzingId, setAnalyzingId]       = useState<string | null>(null);
 
@@ -76,7 +77,7 @@ export default function ThreatHunting() {
         setReportError(null);
         setReportSuccess(null);
         try {
-            const res = await axios.post(`/api/hunting/report?days=${days}`, {}, { responseType: 'blob', timeout: 0 });
+            const res = await axios.post(`/api/hunting/report?days=${days}&model=${reportModel}`, {}, { responseType: 'blob', timeout: 0 });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' }));
             const a = document.createElement('a');
             a.href = url;
@@ -190,12 +191,26 @@ export default function ThreatHunting() {
                             <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Look-back</span>
                             <select value={days} onChange={e => setDays(Number(e.target.value))}
                                 style={{ background: 'none', border: 'none', color: 'var(--pwc-orange)', fontSize: 13, fontWeight: 700, cursor: 'pointer', outline: 'none', padding: '4px 0' }}>
+                                <option value={0.5}>12 Hours</option>
                                 <option value={1}>24 Hours</option>
+                                <option value={2}>48 Hours</option>
+                                <option value={3}>3 Days</option>
                                 <option value={7}>7 Days</option>
                                 <option value={14}>14 Days</option>
                                 <option value={30}>30 Days</option>
+                                <option value={60}>60 Days</option>
+                                <option value={90}>90 Days</option>
                             </select>
                         </div>
+                        <select
+                            value={reportModel}
+                            onChange={e => setReportModel(e.target.value)}
+                            disabled={reportLoading}
+                            style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                        >
+                            <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                            <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        </select>
                         <button
                             className="btn btn-primary"
                             onClick={generateReport}

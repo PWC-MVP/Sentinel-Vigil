@@ -311,11 +311,12 @@ function AiReportTab() {
     const [success, setSuccess] = useState<boolean | null>(null);
     const [report, setReport]   = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
     const [error, setError]     = useState<string | null>(null);
+    const [model, setModel]     = useState('claude-sonnet-4-6');
 
     const generate = async () => {
         setLoading(true); setError(null); setReport(null); setSuccess(null);
         try {
-            const res = await axios.get('/api/workbooks/report?days=30', { timeout: 0 });
+            const res = await axios.get(`/api/workbooks/report?days=30&model=${model}`, { timeout: 0 });
             setReport(res.data);
             setSuccess(true);
         } catch (e: any) {
@@ -345,10 +346,20 @@ function AiReportTab() {
                     Click Generate to run an LLM-powered analysis across your entire workbook inventory —
                     gap analysis, stale workbook risk, health summary, and specific deployment recommendations.
                 </div>
-                <button className="btn btn-primary" onClick={generate}>
-                    <FontAwesomeIcon icon={faRobot} style={{ marginRight: 8 }} />
-                    Generate AI Report
-                </button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <select
+                        value={model}
+                        onChange={e => setModel(e.target.value)}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                    >
+                        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                    </select>
+                    <button className="btn btn-primary" onClick={generate}>
+                        <FontAwesomeIcon icon={faRobot} style={{ marginRight: 8 }} />
+                        Generate AI Report
+                    </button>
+                </div>
             </div>
         );
     }
@@ -384,7 +395,7 @@ function AiReportTab() {
                         </>
                     )}
                 </div>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     {report && (
                         <>
                             <button className="btn btn-sm btn-ghost" onClick={() => doExport('html')}>
@@ -395,6 +406,15 @@ function AiReportTab() {
                             </button>
                         </>
                     )}
+                    <select
+                        value={model}
+                        onChange={e => setModel(e.target.value)}
+                        disabled={loading}
+                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                    >
+                        <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                    </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
                         {loading ? 'Generating…' : 'Regenerate'}

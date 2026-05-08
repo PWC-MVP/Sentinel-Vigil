@@ -9,10 +9,12 @@ GET /api/dcr/activity   → DCR create/update/delete activity from AzureActivity
 GET /api/dcr/report     → LLM-powered comprehensive DCR assessment
 """
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from backend.services.sentinel import call_azure_mgmt_api_async, run_kql
 from backend.services import llm as llm_service
@@ -103,7 +105,7 @@ async def get_dcr_rules():
 
 
 @router.get("/ingestion")
-async def get_ingestion_stats(days: int = Query(30)):
+async def get_ingestion_stats(days: float = Query(30)):
     """Ingestion volumes and trends from the Usage table."""
     volume_q = f"""
     Usage
@@ -175,11 +177,12 @@ async def get_ingestion_stats(days: int = Query(30)):
 
 
 @router.get("/errors")
-async def get_dcr_errors(days: int = Query(30)):
+async def get_dcr_errors(days: float = Query(30)):
     """DCR transformation errors and dropped events."""
     errors_q = f"""
     DCRLogErrors
     | where TimeGenerated > ago({days}d)
+    | extend DCRName = tostring(split(_ResourceId, '/')[-1])
     | summarize
         Count    = count(),
         FirstSeen = min(TimeGenerated),
@@ -199,6 +202,7 @@ async def get_dcr_errors(days: int = Query(30)):
     trend_q = f"""
     DCRLogErrors
     | where TimeGenerated > ago({days}d)
+    | extend DCRName = tostring(split(_ResourceId, '/')[-1])
     | summarize ErrorCount = count() by bin(TimeGenerated, 1d), DCRName
     | sort by TimeGenerated asc
     """
@@ -252,7 +256,7 @@ async def get_dcr_errors(days: int = Query(30)):
 
 
 @router.get("/activity")
-async def get_dcr_activity(days: int = Query(30)):
+async def get_dcr_activity(days: float = Query(30)):
     """DCR create/update/delete governance events from AzureActivity."""
     q = f"""
     AzureActivity
@@ -287,7 +291,7 @@ async def get_dcr_activity(days: int = Query(30)):
 
 
 @router.get("/overview")
-async def get_dcr_overview(days: int = Query(30)):
+async def get_dcr_overview(days: float = Query(30)):
     """High-level DCR health summary combining all sub-endpoints."""
     rules_d, ing_d, errors_d = await asyncio.gather(
         get_dcr_rules(),
@@ -319,10 +323,17 @@ async def get_dcr_overview(days: int = Query(30)):
 # ── LLM Report ────────────────────────────────────────────────────────────────
 
 @router.get("/report")
-async def generate_dcr_report(days: int = Query(30)):
+async def generate_dcr_report(days: float = Query(30), model: str | None = Query(None)):
     """
     Generate a comprehensive LLM-powered DCR Assessment & Injection Optimization report.
-    Gathers all DCR telemetry and uses the LLM to produce an expert-grade analysis.
+    Returns a Server-Sent Events stream so the connection is never idle long enough
+    to trigger a 504 from the gateway (Azure Container Apps, nginx, etc.).
+
+    SSE event types:
+      {"type":"progress","message":"…"}   — data-gathering status updates
+      {"type":"delta","content":"…"}      — streaming LLM token chunks
+      {"type":"done"}                     — report complete
+      {"type":"error","content":"…"}      — fatal error
     """
     top_tables_q = f"""
     Usage
@@ -339,108 +350,123 @@ async def generate_dcr_report(days: int = Query(30)):
     | limit 25
     """
 
-    tasks = await asyncio.gather(
-        get_dcr_rules(),
-        get_ingestion_stats(days=days),
-        get_dcr_errors(days=days),
-        get_dcr_activity(days=days),
-        run_kql(top_tables_q, days=days),
-        return_exceptions=True,
-    )
+    async def _stream():
+        try:
+            yield f'data: {json.dumps({"type":"progress","message":"Fetching DCR telemetry…"})}\n\n'
 
-    rules_d    = tasks[0] if not isinstance(tasks[0], Exception) else {}
-    ing_d      = tasks[1] if not isinstance(tasks[1], Exception) else {}
-    errors_d   = tasks[2] if not isinstance(tasks[2], Exception) else {}
-    activity_d = tasks[3] if not isinstance(tasks[3], Exception) else {}
-    top_rows   = tasks[4].get("rows", []) if not isinstance(tasks[4], Exception) and isinstance(tasks[4], dict) else []
+            # Launch all data-gathering concurrently.  Use shield+wait_for so we
+            # can yield SSE keepalive comments every 5 s while waiting, which
+            # prevents proxies (Azure Container Apps, nginx) from issuing a 504.
+            gather_fut = asyncio.gather(
+                get_dcr_rules(),
+                get_ingestion_stats(days=days),
+                get_dcr_errors(days=days),
+                get_dcr_activity(days=days),
+                run_kql(top_tables_q, days=days),
+                return_exceptions=True,
+            )
 
-    rules       = rules_d.get("rules",        [])
-    ing_sum     = ing_d.get("summary",         {})
-    by_table    = ing_d.get("by_table",        [])
-    daily_trend = ing_d.get("daily_trend",     [])
-    errors      = errors_d.get("errors",       [])
-    diag        = errors_d.get("diagnostics",  [])
-    activity    = activity_d.get("activity",   [])
+            while not gather_fut.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(gather_fut), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
 
-    with_transforms    = [r for r in rules if r["has_transformation"]]
-    without_transforms = [r for r in rules if not r["has_transformation"]]
-    failed_rules       = [r for r in rules if r["provisioning_state"] not in ("Succeeded", "")]
-    stale_rules        = [r for r in rules if (r.get("days_since_modified") or 0) > 90]
+            tasks = gather_fut.result()
 
-    total_mb     = ing_sum.get("total_mb",    0)
-    total_gb     = ing_sum.get("total_gb",    0)
-    daily_avg_mb = ing_sum.get("daily_avg_mb", 0)
-    monthly_gb   = ing_sum.get("estimated_monthly_gb", 0)
-    est_cost     = round(monthly_gb * 2.76, 2)
+            rules_d    = tasks[0] if not isinstance(tasks[0], Exception) else {}
+            ing_d      = tasks[1] if not isinstance(tasks[1], Exception) else {}
+            errors_d   = tasks[2] if not isinstance(tasks[2], Exception) else {}
+            activity_d = tasks[3] if not isinstance(tasks[3], Exception) else {}
+            top_rows   = tasks[4].get("rows", []) if not isinstance(tasks[4], Exception) and isinstance(tasks[4], dict) else []
 
-    # ── Table builders ────────────────────────────────────────────────────────
-    def _rule_row(r):
-        td = r.get("days_since_modified", "?")
-        return (
-            f"| {r['name'][:45]} | {r['location']} | {r['provisioning_state']} "
-            f"| {r['data_flows']} | {r['transformations']} | {r['custom_streams']} "
-            f"| {'Yes' if r['has_transformation'] else 'No'} | {td} days |"
-        )
+            rules       = rules_d.get("rules",       [])
+            ing_sum     = ing_d.get("summary",        {})
+            by_table    = ing_d.get("by_table",       [])
+            daily_trend = ing_d.get("daily_trend",    [])
+            errors      = errors_d.get("errors",      [])
+            diag        = errors_d.get("diagnostics", [])
+            activity    = activity_d.get("activity",  [])
 
-    def _table_row(t):
-        return (
-            f"| {t['table'][:40]} | {t['total_mb']} MB "
-            f"| {t['daily_avg']} MB/d | {t['pct']}% |"
-        )
+            with_transforms    = [r for r in rules if r["has_transformation"]]
+            without_transforms = [r for r in rules if not r["has_transformation"]]
+            failed_rules       = [r for r in rules if r["provisioning_state"] not in ("Succeeded", "")]
+            stale_rules        = [r for r in rules if (r.get("days_since_modified") or 0) > 90]
 
-    def _top_row(r):
-        est = round(r.get("TotalMB", 0) / 1024 * 2.76, 2)
-        return (
-            f"| {r.get('DataType','')[:40]} | {r.get('TotalMB', 0)} MB "
-            f"| {r.get('DailyAvgMB', 0)} MB/d | ${est} |"
-        )
+            total_mb     = ing_sum.get("total_mb",             0)
+            total_gb     = ing_sum.get("total_gb",             0)
+            daily_avg_mb = ing_sum.get("daily_avg_mb",         0)
+            monthly_gb   = ing_sum.get("estimated_monthly_gb", 0)
+            est_cost     = round(monthly_gb * 2.76, 2)
 
-    def _err_row(e):
-        return (
-            f"| {e['rule_name'][:35]} | {e['stream'][:25]} | {e['error_code']} "
-            f"| {str(e['message'])[:60]} | {e['count']} |"
-        )
+            # ── Table builders ────────────────────────────────────────────────
+            def _rule_row(r):
+                td = r.get("days_since_modified", "?")
+                return (
+                    f"| {r['name'][:45]} | {r['location']} | {r['provisioning_state']} "
+                    f"| {r['data_flows']} | {r['transformations']} | {r['custom_streams']} "
+                    f"| {'Yes' if r['has_transformation'] else 'No'} | {td} days |"
+                )
 
-    def _act_row(a):
-        op = a["operation"].split("/")[-1][:35]
-        return f"| {op} | {a['resource'][:35]} | {a['status']} | {a['caller'][:25]} | {a['count']} |"
+            def _table_row(t):
+                return (
+                    f"| {t['table'][:40]} | {t['total_mb']} MB "
+                    f"| {t['daily_avg']} MB/d | {t['pct']}% |"
+                )
 
-    rule_hdr = (
-        "| DCR Name | Location | State | Flows | Transforms | Custom Streams | KQL Transform | Days Since Modified |\n"
-        "|----------|----------|-------|-------|------------|----------------|---------------|---------------------|"
-    )
-    rule_rows_str = "\n".join(_rule_row(r) for r in rules[:30]) or "  No DCRs found"
+            def _top_row(r):
+                est = round(r.get("TotalMB", 0) / 1024 * 2.76, 2)
+                return (
+                    f"| {r.get('DataType','')[:40]} | {r.get('TotalMB', 0)} MB "
+                    f"| {r.get('DailyAvgMB', 0)} MB/d | ${est} |"
+                )
 
-    tbl_hdr = (
-        "| Table | Total Volume | Daily Avg | % of Total |\n"
-        "|-------|-------------|-----------|------------|"
-    )
-    tbl_rows_str = "\n".join(_table_row(t) for t in by_table[:20]) or "  No ingestion data"
+            def _err_row(e):
+                return (
+                    f"| {e['rule_name'][:35]} | {e['stream'][:25]} | {e['error_code']} "
+                    f"| {str(e['message'])[:60]} | {e['count']} |"
+                )
 
-    top_hdr = (
-        "| Table | Total Volume | Daily Avg | Est. Cost (period) |\n"
-        "|-------|-------------|-----------|-------------------|"
-    )
-    top_rows_str = "\n".join(_top_row(r) for r in top_rows[:15]) or "  No data"
+            def _act_row(a):
+                op = a["operation"].split("/")[-1][:35]
+                return f"| {op} | {a['resource'][:35]} | {a['status']} | {a['caller'][:25]} | {a['count']} |"
 
-    err_hdr = (
-        "| DCR Rule | Stream | Error Code | Error Message | Count |\n"
-        "|----------|--------|------------|---------------|-------|"
-    )
-    err_rows_str = "\n".join(_err_row(e) for e in errors[:15]) or "  No errors recorded"
+            rule_hdr = (
+                "| DCR Name | Location | State | Flows | Transforms | Custom Streams | KQL Transform | Days Since Modified |\n"
+                "|----------|----------|-------|-------|------------|----------------|---------------|---------------------|"
+            )
+            rule_rows_str = "\n".join(_rule_row(r) for r in rules[:30]) or "  No DCRs found"
 
-    act_hdr = (
-        "| Operation | Resource | Status | Caller | Count |\n"
-        "|-----------|----------|--------|--------|-------|"
-    )
-    act_rows_str = "\n".join(_act_row(a) for a in activity[:15]) or "  No DCR activity"
+            tbl_hdr = (
+                "| Table | Total Volume | Daily Avg | % of Total |\n"
+                "|-------|-------------|-----------|------------|"
+            )
+            tbl_rows_str = "\n".join(_table_row(t) for t in by_table[:20]) or "  No ingestion data"
 
-    trend_str = " → ".join(
-        f"{d['date']}: {d['total_mb']} MB"
-        for d in daily_trend[-7:]
-    ) or "No trend data"
+            top_hdr = (
+                "| Table | Total Volume | Daily Avg | Est. Cost (period) |\n"
+                "|-------|-------------|-----------|-------------------|"
+            )
+            top_rows_str = "\n".join(_top_row(r) for r in top_rows[:15]) or "  No data"
 
-    context = f"""SENTINEL DCR (DATA COLLECTION RULES) ASSESSMENT & INJECTION OPTIMIZATION — Last {days} days
+            err_hdr = (
+                "| DCR Rule | Stream | Error Code | Error Message | Count |\n"
+                "|----------|--------|------------|---------------|-------|"
+            )
+            err_rows_str = "\n".join(_err_row(e) for e in errors[:15]) or "  No errors recorded"
+
+            act_hdr = (
+                "| Operation | Resource | Status | Caller | Count |\n"
+                "|-----------|----------|--------|--------|-------|"
+            )
+            act_rows_str = "\n".join(_act_row(a) for a in activity[:15]) or "  No DCR activity"
+
+            trend_str = " → ".join(
+                f"{d['date']}: {d['total_mb']} MB"
+                for d in daily_trend[-7:]
+            ) or "No trend data"
+
+            context = f"""SENTINEL DCR (DATA COLLECTION RULES) ASSESSMENT & INJECTION OPTIMIZATION — Last {days} days
 ========================================================================================
 
 ## 1. Global Overview
@@ -507,7 +533,7 @@ async def generate_dcr_report(days: int = Query(30)):
 {chr(10).join(f"  - {r['name']}: {r['data_flows']} flow(s) | {r['custom_streams']} custom streams" for r in without_transforms[:15]) or "  None"}
 """
 
-    system_prompt = """You are a Microsoft Sentinel and Azure Monitor expert specialising in Data Collection Rules (DCR), \
+            system_prompt = """You are a Microsoft Sentinel and Azure Monitor expert specialising in Data Collection Rules (DCR), \
 log ingestion pipelines, transformation KQL, and cost optimisation.
 Analyse the DCR telemetry provided and produce a comprehensive, actionable assessment report.
 
@@ -580,24 +606,31 @@ Be precise and evidence-based. Every finding must reference specific DCR names a
 Include actual KQL code snippets for transformation recommendations. \
 Do NOT include generic advice — everything must be grounded in this workspace's actual data."""
 
-    token_usage: dict = {}
-    try:
-        result       = await llm_service.complete(system_prompt, context)
-        llm_analysis = result["text"]
-        token_usage  = result["usage"]
-    except Exception as e:
-        logger.error("DCR LLM report generation failed: %s", e)
-        llm_analysis = f"LLM analysis unavailable: {e}"
+            yield f'data: {json.dumps({"type":"progress","message":"Running LLM analysis…"})}\n\n'
 
-    return {
-        "days":        days,
-        "raw_data": {
-            "rules":    rules_d,
-            "ingestion": ing_d,
-            "errors":   errors_d,
-            "activity": activity_d,
+            token_usage: dict = {}
+            async for chunk in llm_service.stream_complete(system_prompt, context, model=model):
+                if chunk["type"] == "text":
+                    yield f'data: {json.dumps({"type":"token","text":chunk["text"]})}\n\n'
+                elif chunk["type"] == "usage":
+                    token_usage = {
+                        "input_tokens":  chunk["input_tokens"],
+                        "output_tokens": chunk["output_tokens"],
+                        "model":         chunk["model"],
+                    }
+
+            generated_at = datetime.utcnow().isoformat() + "Z"
+            yield f'data: {json.dumps({"type":"done","generated_at":generated_at,"token_usage":token_usage})}\n\n'
+
+        except Exception as e:
+            logger.error("DCR report stream failed: %s", e)
+            yield f'data: {json.dumps({"type":"error","msg":str(e)})}\n\n'
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # prevent nginx / Azure Container Apps from buffering
         },
-        "llm_analysis": llm_analysis,
-        "token_usage":  token_usage,
-        "generated_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
-    }
+    )

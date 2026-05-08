@@ -357,7 +357,7 @@ async def get_categories():
 
 
 @router.post("/run/{hunt_id}")
-async def run_hunt(hunt_id: str, days: int = Query(7)):
+async def run_hunt(hunt_id: str, days: float = Query(7)):
     """Execute a named hunting query from the library."""
     hunt = next((q for q in LIBRARY if q["id"] == hunt_id), None)
     if not hunt:
@@ -386,7 +386,7 @@ async def run_hunt(hunt_id: str, days: int = Query(7)):
 
 
 @router.post("/run-custom")
-async def run_custom(payload: dict, days: int = Query(7)):
+async def run_custom(payload: dict, days: float = Query(7)):
     """Execute an ad-hoc KQL hunting query."""
     query = (payload.get("query") or "").strip()
     if not query:
@@ -923,7 +923,7 @@ tr:hover td{{background:#263548}}
     <section id="appendix">
       <h2><span class="section-num">6</span>Appendix — KQL Hunting Queries</h2>
       <div class="card">
-        <p style="font-size:12px;color:#64748b;margin-bottom:20px">All queries were executed with a look-back window of <strong style="color:#e2e8f0">{days} day{"s" if days != 1 else ""}</strong>. Parameterised references to <code style="color:#93c5fd">ago(Nd)</code> use the selected look-back. Run queries in KQL Explorer for interactive investigation.</p>
+        <p style="font-size:12px;color:#64748b;margin-bottom:20px">All queries were executed with a look-back window of <strong style="color:#e2e8f0">{"12 hours" if days == 0.5 else f"{int(days * 24)} hours" if days < 1 else f"{int(days)} day{'s' if days != 1 else ''}"}</strong>. Parameterised references to <code style="color:#93c5fd">ago(Nd)</code> use the selected look-back. Run queries in KQL Explorer for interactive investigation.</p>
         {appendix}
       </div>
     </section>
@@ -935,7 +935,7 @@ tr:hover td{{background:#263548}}
 
 
 @router.post("/report")
-async def generate_hunting_report(days: int = Query(7)):
+async def generate_hunting_report(days: float = Query(7), model: str | None = Query(None)):
     """
     Run ALL library hunts in parallel and return a comprehensive HTML report.
     Each hunt section includes statistics, data tables, MITRE mappings, and
@@ -965,7 +965,7 @@ async def generate_hunting_report(days: int = Query(7)):
     ai_narrative = ""
     per_hunt_analyses: dict = {}
     try:
-        ai_tasks = [_generate_ai_narrative(results, days)] + [
+        ai_tasks = [_generate_ai_narrative(results, days, model=model)] + [
             _analyze_hunt_finding(r, r.get("rows", []), r.get("row_count", 0), days)
             for r in with_hits_for_ai
         ]

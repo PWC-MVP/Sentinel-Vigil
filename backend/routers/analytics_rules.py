@@ -82,7 +82,7 @@ class TuneSuggestionRequest(BaseModel):
 
 
 @router.get("/overview")
-async def get_rules_overview(days: int = Query(30)):
+async def get_rules_overview(days: float = Query(30)):
     """Aggregate SecurityAlert counts across all active detection rules."""
     q = f"""
     SecurityAlert
@@ -114,7 +114,7 @@ async def get_rules_overview(days: int = Query(30)):
 
 
 @router.get("/activity")
-async def get_rule_activity(days: int = Query(30)):
+async def get_rule_activity(days: float = Query(30)):
     """Per-rule alert firing statistics, sorted by volume."""
     q = f"""
     SecurityAlert
@@ -150,7 +150,7 @@ async def get_rule_activity(days: int = Query(30)):
 
 
 @router.get("/by-tactic")
-async def get_alerts_by_tactic(days: int = Query(30)):
+async def get_alerts_by_tactic(days: float = Query(30)):
     """Alerts grouped by MITRE ATT&CK tactic."""
     q = f"""
     SecurityAlert
@@ -180,7 +180,7 @@ async def get_alerts_by_tactic(days: int = Query(30)):
 
 
 @router.get("/trend")
-async def get_alert_trend(days: int = Query(30)):
+async def get_alert_trend(days: float = Query(30)):
     """Daily alert counts broken down by severity."""
     q = f"""
     SecurityAlert
@@ -207,7 +207,7 @@ async def get_alert_trend(days: int = Query(30)):
 
 
 @router.get("/silent-rules")
-async def get_silent_rules(days: int = Query(30)):
+async def get_silent_rules(days: float = Query(30)):
     """Rules that fired previously but have gone silent in the last period — possible broken detections."""
     # Rules that fired > 30 days ago but not in the last `days`
     q = f"""
@@ -241,7 +241,7 @@ async def get_silent_rules(days: int = Query(30)):
 
 
 @router.get("/rule-detail")
-async def get_rule_detail(name: str = Query(...), days: int = Query(30)):
+async def get_rule_detail(name: str = Query(...), days: float = Query(30)):
     """
     Fetch full detail for a single analytics rule:
     - KQL query & configuration from the Azure Management API (Sentinel alertRules)
@@ -482,7 +482,7 @@ async def get_tune_suggestion(req: TuneSuggestionRequest):
 # ── LLM Bulk Report ───────────────────────────────────────────────────────────
 
 @router.get("/report")
-async def generate_analytics_rules_report(days: int = Query(30)):
+async def generate_analytics_rules_report(days: float = Query(30), model: str | None = Query(None)):
     """
     Generate a comprehensive LLM-powered analytics rules assessment report.
     Gathers all rule telemetry, MITRE coverage, trend data, and KQL definitions,
@@ -694,7 +694,7 @@ async def generate_analytics_rules_report(days: int = Query(30)):
     )
 
     try:
-        result = await llm_service.complete(system_prompt, context)
+        result = await llm_service.complete(system_prompt, context, model=model)
         return {
             "llm_analysis": result["text"],
             "generated_at": datetime.now(timezone.utc).isoformat(),

@@ -306,7 +306,7 @@ async def get_workbook_activity(days: int = Query(30)):
 # ── LLM Report ────────────────────────────────────────────────────────────────
 
 @router.get("/report")
-async def generate_workbook_report(days: int = Query(30)):
+async def generate_workbook_report(days: int = Query(30), model: str | None = Query(None)):
     """
     Generate a comprehensive LLM-powered Workbook Coverage report.
     Gathers coverage matrix, all workbook metadata, and recent activity,
@@ -479,7 +479,7 @@ Be precise and evidence-based. Every finding must reference specific data from t
 
     token_usage: dict = {}
     try:
-        result       = await llm_service.complete(system_prompt, context)
+        result       = await llm_service.complete(system_prompt, context, model=model)
         llm_analysis = result["text"]
         token_usage  = result["usage"]
     except Exception as e:
