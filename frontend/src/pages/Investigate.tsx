@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
     startInvestigation, getInvestigation, createInvestigationWS,
-    type Job, type JobUpdate, type InvestigationResult, type IPIntelligence,
+    type Job, type JobUpdate, type InvestigationResult, type IPIntelligence, type IncidentRow,
 } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
@@ -75,65 +75,238 @@ function IPCard({ ip }: { ip: IPIntelligence }) {
     );
 }
 
+// ── Incident Detail Modal ─────────────────────────────────────────────────────
+function IncidentDetailModal({
+    incident,
+    result,
+    onClose,
+}: {
+    incident: IncidentRow;
+    result: InvestigationResult;
+    onClose: () => void;
+}) {
+    const [analyzing, setAnalyzing] = useState(false);
+    const [analysis, setAnalysis] = useState<string | null>(null);
+    const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
+    const analyze = async () => {
+        setAnalyzing(true);
+        setAnalyzeError(null);
+        try {
+            const resp = await fetch('/api/investigations/analyze-incident', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    incident,
+                    context: {
+                        upn: result.upn,
+                        risk_level: result.risk_level,
+                        risk_factors: result.risk_factors,
+                        mitigating_factors: result.mitigating_factors,
+                        anomaly_count: result.anomalies.length,
+                        incident_count: result.incidents.length,
+                    },
+                }),
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+                throw new Error(err.detail || 'Analysis failed');
+            }
+            const data = await resp.json();
+            setAnalysis(data.analysis);
+        } catch (e) {
+            setAnalyzeError(e instanceof Error ? e.message : 'Analysis failed');
+        } finally {
+            setAnalyzing(false);
+        }
+    };
+
+    return (
+        <div
+            style={{
+                position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
+                backdropFilter: 'blur(4px)', zIndex: 1000,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+            }}
+            onClick={onClose}
+        >
+            <div
+                style={{
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-lg)', padding: 24, width: 660,
+                    maxWidth: '95vw', maxHeight: '88vh', overflow: 'auto',
+                }}
+                onClick={e => e.stopPropagation()}
+            >
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
+                    <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                            <FontAwesomeIcon icon={faShieldHalved} style={{ color: 'var(--brand)', fontSize: 18 }} />
+                            <div style={{ fontSize: 15, fontWeight: 700 }}>{incident.Title || 'Security Incident'}</div>
+                        </div>
+                        <div className="text-xs text-muted">Microsoft Sentinel — Incident Details</div>
+                    </div>
+                    <button className="btn btn-ghost btn-sm" onClick={onClose} style={{ padding: '4px 10px' }}>✕</button>
+                </div>
+
+                {/* Details grid */}
+                <div style={{
+                    display: 'grid', gridTemplateColumns: '130px 1fr', gap: '10px 16px',
+                    background: 'var(--bg-base)', borderRadius: 'var(--radius-sm)',
+                    padding: 16, marginBottom: 20, fontSize: 13,
+                }}>
+                    <span className="text-muted" style={{ alignSelf: 'center' }}>Incident ID</span>
+                    <span className="mono" style={{ fontSize: 12 }}>{incident.ProviderIncidentId || '—'}</span>
+
+                    <span className="text-muted" style={{ alignSelf: 'center' }}>Severity</span>
+                    <span><span className={`badge ${riskClass(incident.Severity)}`}>{incident.Severity || '—'}</span></span>
+
+                    <span className="text-muted" style={{ alignSelf: 'center' }}>Status</span>
+                    <span>{incident.Status || '—'}</span>
+
+                    <span className="text-muted" style={{ alignSelf: 'center' }}>Created</span>
+                    <span>{incident.CreatedTime ? new Date(incident.CreatedTime).toLocaleString() : '—'}</span>
+
+                    {incident.ProviderIncidentUrl && (
+                        <>
+                            <span className="text-muted" style={{ alignSelf: 'center' }}>Sentinel</span>
+                            <a href={incident.ProviderIncidentUrl} target="_blank" rel="noreferrer"
+                                style={{ color: 'var(--text-link)', fontSize: 12 }}>
+                                ↗ Open in Microsoft Sentinel
+                            </a>
+                        </>
+                    )}
+                </div>
+
+                {/* Analyze button (shown when no analysis yet) */}
+                {!analysis && (
+                    <button
+                        className="btn btn-primary"
+                        style={{ width: '100%' }}
+                        disabled={analyzing}
+                        onClick={analyze}
+                    >
+                        {analyzing
+                            ? <><span className="spinner" /> Analyzing incident…</>
+                            : <><FontAwesomeIcon icon={faRobot} style={{ marginRight: 8 }} /> Analyze with AI &amp; Get Recommendations</>
+                        }
+                    </button>
+                )}
+
+                {analyzeError && (
+                    <div style={{ color: 'var(--critical)', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                        <FontAwesomeIcon icon={faTriangleExclamation} />
+                        {analyzeError}
+                    </div>
+                )}
+
+                {/* Analysis result */}
+                {analysis && (
+                    <div style={{ marginTop: 4 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 13 }}>
+                                <FontAwesomeIcon icon={faRobot} style={{ color: 'var(--brand)' }} />
+                                AI Analysis &amp; Recommendations
+                            </div>
+                            <button className="btn btn-ghost btn-sm" onClick={analyze} disabled={analyzing} style={{ fontSize: 11 }}>
+                                {analyzing ? <span className="spinner" style={{ width: 10, height: 10 }} /> : '↻ Re-analyze'}
+                            </button>
+                        </div>
+                        <div style={{
+                            background: 'rgba(56,139,253,0.05)', borderLeft: '3px solid var(--brand)',
+                            border: '1px solid rgba(56,139,253,0.18)', borderRadius: 'var(--radius-sm)',
+                            padding: 16, fontSize: 13, lineHeight: 1.75, whiteSpace: 'pre-wrap',
+                        }}>
+                            {analysis}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+
 // ── Inline Results ────────────────────────────────────────────────────────────
 function ResultsPanel({ result }: { result: InvestigationResult }) {
     const [tab, setTab] = useState<'overview' | 'ips' | 'signins' | 'activity' | 'cloud' | 'identity' | 'raw'>('overview');
     const [exporting, setExporting] = useState(false);
+    const [selectedIncident, setSelectedIncident] = useState<IncidentRow | null>(null);
 
     const handleExport = async (type: 'pdf' | 'html') => {
         setExporting(true);
         try {
-            const endpoint = type === 'pdf' ? '/api/reports/export-pdf' : '/api/reports/export-html';
-            // We need a simple way to get the HTML of the results panel.
-            // Since we can't easily scrape the whole complex React state to HTML here,
-            // we'll use the report_path if available, or generate a simple one.
-
-            let payload: any = { filename: `Investigation_${result.upn}_${new Date().toISOString().slice(0, 10)}.${type}` };
+            const filename = `Investigation_${result.upn}_${new Date().toISOString().slice(0, 10)}.${type}`;
 
             if (type === 'html' && !result.report_path) {
-                // If HTML is requested but no report was pre-generated, use the new on-demand generator
-                const resp = await fetch('/api/investigations/export-html-report', {
+                // Queue a background job — returns immediately, no gateway timeout
+                const startResp = await fetch('/api/investigations/export-html-report', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(result)
+                    body: JSON.stringify(result),
                 });
-                if (!resp.ok) throw new Error("HTML report generation failed");
-                const blob = await resp.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = payload.filename;
-                a.click();
-                return;
+                if (!startResp.ok) throw new Error('Failed to queue HTML report generation');
+                const { job_id } = await startResp.json();
+
+                // Poll every 2 s until the file is ready (max 3 minutes)
+                for (let attempt = 0; attempt < 90; attempt++) {
+                    await new Promise<void>(r => setTimeout(r, 2000));
+                    const pollResp = await fetch(`/api/investigations/export-html-report/${job_id}`);
+                    if (!pollResp.ok) throw new Error('HTML report generation failed');
+
+                    const ct = pollResp.headers.get('Content-Type') ?? '';
+                    if (ct.includes('text/html')) {
+                        const blob = await pollResp.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        return;
+                    }
+
+                    const data = await pollResp.json();
+                    if (data.status === 'failed') throw new Error('Report generation failed on server');
+                    // pending/running — keep polling
+                }
+                throw new Error('HTML report generation timed out after 3 minutes');
             }
 
+            // PDF or HTML with pre-generated report_path — use the reports export endpoints
+            const endpoint = type === 'pdf' ? '/api/reports/export-pdf' : '/api/reports/export-html';
+            const payload: Record<string, string> = { filename };
             if (result.report_path) {
                 payload.file_path = result.report_path;
             } else {
-                // Fallback for PDF if no report was generated
                 payload.html = `<html><body><h1>Investigation: ${result.upn}</h1><pre>${JSON.stringify(result, null, 2)}</pre></body></html>`;
             }
 
             const resp = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(payload),
             });
-
             if (!resp.ok) throw new Error(`${type.toUpperCase()} export failed`);
 
             const blob = await resp.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = payload.filename;
+            a.download = filename;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
         } catch (e) {
             console.error(e);
-            alert(`Failed to export ${type.toUpperCase()}`);
+            alert(`Failed to export ${type.toUpperCase()}: ${e instanceof Error ? e.message : e}`);
         } finally {
             setExporting(false);
-        }
+            }
     };
 
     return (
@@ -309,11 +482,18 @@ function ResultsPanel({ result }: { result: InvestigationResult }) {
                                     </thead>
                                     <tbody>
                                         {result.incidents.map((inc, i) => (
-                                            <tr key={i}>
+                                            <tr key={i} style={{ cursor: 'pointer' }} onClick={() => setSelectedIncident(inc)}>
                                                 <td>
-                                                    {inc.ProviderIncidentUrl
-                                                        ? <a href={inc.ProviderIncidentUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--text-link)' }}>{inc.Title}</a>
-                                                        : inc.Title}
+                                                    <button
+                                                        style={{
+                                                            background: 'none', border: 'none', padding: 0,
+                                                            color: 'var(--text-link)', cursor: 'pointer',
+                                                            fontSize: 'inherit', textAlign: 'left', fontWeight: 500,
+                                                        }}
+                                                        onClick={e => { e.stopPropagation(); setSelectedIncident(inc); }}
+                                                    >
+                                                        {inc.Title}
+                                                    </button>
                                                 </td>
                                                 <td><span className={`badge ${riskClass(inc.Severity)}`}>{inc.Severity}</span></td>
                                                 <td>{inc.Status}</td>
@@ -589,6 +769,14 @@ function ResultsPanel({ result }: { result: InvestigationResult }) {
                         {JSON.stringify(result, null, 2)}
                     </pre>
                 </div>
+            )}
+
+            {selectedIncident && (
+                <IncidentDetailModal
+                    incident={selectedIncident}
+                    result={result}
+                    onClose={() => setSelectedIncident(null)}
+                />
             )}
         </div>
     );

@@ -3,15 +3,38 @@ import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faListCheck, faChartBar, faShieldHalved, faTriangleExclamation,
-    faSearch, faBellSlash, faFilePdf, faFileCode, faRefresh
+    faSearch, faBellSlash, faFilePdf, faFileCode, faRefresh,
+    faXmark, faRobot, faSpinner, faCode, faChevronRight,
+    faCopy, faCheck, faCommentDots, faWandMagicSparkles,
+    faChevronDown, faChevronUp, faBolt, faCircleXmark,
 } from '@fortawesome/free-solid-svg-icons';
+import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface Overview { total_alerts: number; unique_rules: number; high_alerts: number; medium_alerts: number; low_alerts: number; }
 interface Rule { name: string; product: string; severity: string; alert_count: number; last_fired: string; first_fired: string; linked_incidents: number; }
 interface TacticRow { tactic: string; alert_count: number; unique_rules: number; }
 interface TrendPoint { date: string; High: number; Medium: number; Low: number; Informational: number; }
 interface SilentRule { name: string; product: string; severity: string; last_fired: string; total_alerts: number; }
 
+interface RuleDefinition {
+    display_name?: string; description?: string; severity?: string;
+    enabled?: boolean; tactics?: string[]; techniques?: string[];
+    query?: string; query_period?: string; query_frequency?: string;
+    trigger_threshold?: number; trigger_operator?: string;
+    suppression_enabled?: boolean; suppression_duration?: string;
+}
+interface AlertSample { time: string; severity: string; description: string; tactics: string; entities?: Array<{ type: string; name: string }>; }
+interface IncidentComment { incident_number: string | number; incident_title: string; severity: string; status: string; comment: string; }
+interface RuleDetail {
+    rule_name: string;
+    definition: RuleDefinition;
+    alert_samples: AlertSample[];
+    incident_comments: IncidentComment[];
+}
+interface TuneSuggestion { suggestion: string; based_on: 'incident_comments' | 'general'; }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function sevColor(s: string) {
     if (s === 'High') return 'var(--critical)';
     if (s === 'Medium') return 'var(--high)';
@@ -24,9 +47,641 @@ function sevBadge(s: string) {
     if (s === 'Low') return 'badge-low';
     return 'badge-muted';
 }
+function isoToHuman(iso: string): string {
+    if (!iso) return '—';
+    const h = iso.match(/(\d+)H/)?.[1];
+    const m = iso.match(/(\d+)M/)?.[1];
+    const d = iso.match(/(\d+)D/)?.[1];
+    const parts = [d && `${d}d`, h && `${h}h`, m && `${m}m`].filter(Boolean);
+    return parts.length ? parts.join(' ') : iso;
+}
 
+// ── Markdown renderer (supports tables, ####, staticColors for HTML export) ───
+function renderMd(md: string, staticColors = false): string {
+    const clr = {
+        brand:   staticColors ? '#D04A02' : 'var(--brand)',
+        surface: staticColors ? '#f1f5f9' : 'var(--bg-surface)',
+        text:    staticColors ? '#1e293b' : 'var(--text-primary)',
+        muted:   staticColors ? '#64748b' : 'var(--text-muted)',
+        border:  staticColors ? '#e2e8f0' : 'var(--border)',
+        rowAlt:  staticColors ? '#f8fafc' : 'var(--bg-surface)',
+    };
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const inline = (s: string) => esc(s)
+        .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/`(.+?)`/g, `<code style="background:${clr.surface};padding:1px 5px;border-radius:3px;font-size:11px;font-family:monospace;color:${clr.brand}">$1</code>`);
+
+    const lines = md.split('\n');
+    const out: string[] = [];
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i].trimEnd();
+        if (line.startsWith('```')) {
+            i++;
+            const block: string[] = [];
+            while (i < lines.length && !lines[i].startsWith('```')) { block.push(esc(lines[i])); i++; }
+            out.push(`<pre style="background:${clr.surface};border:1px solid ${clr.border};border-radius:6px;padding:12px 14px;font-family:monospace;font-size:11.5px;overflow-x:auto;margin:8px 0;line-height:1.6;white-space:pre-wrap;word-break:break-all">${block.join('\n')}</pre>`);
+            i++; continue;
+        }
+        if (/^## /.test(line)) {
+            out.push(`<h3 style="color:${clr.brand};margin:20px 0 8px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em;border-bottom:2px solid ${clr.brand};padding-bottom:5px">${inline(line.slice(3))}</h3>`);
+            i++; continue;
+        }
+        if (/^### /.test(line)) {
+            out.push(`<h4 style="margin:14px 0 5px;font-size:12px;font-weight:700;color:${clr.text}">${inline(line.slice(4))}</h4>`);
+            i++; continue;
+        }
+        if (/^#### /.test(line)) {
+            out.push(`<h5 style="margin:10px 0 4px;font-size:11.5px;font-weight:600;color:${clr.muted}">${inline(line.slice(5))}</h5>`);
+            i++; continue;
+        }
+        if (/^\|/.test(line)) {
+            const tableLines: string[] = [];
+            while (i < lines.length && /^\|/.test(lines[i].trimEnd())) {
+                tableLines.push(lines[i]);
+                i++;
+            }
+            if (tableLines.length >= 2) {
+                const headerCells = tableLines[0].split('|').slice(1, -1).map(cell => cell.trim());
+                const dataRows    = tableLines.slice(2);
+                let tbl = `<div style="overflow-x:auto;margin:10px 0"><table style="border-collapse:collapse;width:100%;font-size:12px"><thead><tr>`;
+                tbl += headerCells.map(cell =>
+                    `<th style="padding:7px 10px;border:1px solid ${clr.border};background:${clr.surface};font-weight:700;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:${clr.muted}">${inline(cell)}</th>`
+                ).join('');
+                tbl += '</tr></thead><tbody>';
+                dataRows.forEach((row, idx) => {
+                    const cells    = row.split('|').slice(1, -1).map(cell => cell.trim());
+                    const rowStyle = idx % 2 === 1 ? `background:${clr.rowAlt}` : '';
+                    tbl += `<tr style="${rowStyle}">` +
+                        cells.map(cell => `<td style="padding:7px 10px;border:1px solid ${clr.border};vertical-align:top;font-size:12px">${inline(cell)}</td>`).join('') +
+                        '</tr>';
+                });
+                tbl += '</tbody></table></div>';
+                out.push(tbl);
+            }
+            continue;
+        }
+        if (/^[-*] /.test(line)) {
+            let ul = '<ul style="padding-left:20px;margin:6px 0">';
+            while (i < lines.length && /^[-*] /.test(lines[i])) {
+                ul += `<li style="margin:3px 0;font-size:12.5px;line-height:1.6">${inline(lines[i].replace(/^[-*] /, ''))}</li>`; i++;
+            }
+            out.push(ul + '</ul>'); continue;
+        }
+        if (/^\d+\. /.test(line)) {
+            let ol = '<ol style="padding-left:20px;margin:6px 0">';
+            while (i < lines.length && /^\d+\. /.test(lines[i])) {
+                ol += `<li style="margin:3px 0;font-size:12.5px;line-height:1.6">${inline(lines[i].replace(/^\d+\. /, ''))}</li>`; i++;
+            }
+            out.push(ol + '</ol>'); continue;
+        }
+        if (line.trim() === '') { out.push('<div style="height:5px"></div>'); i++; continue; }
+        out.push(`<p style="margin:4px 0;font-size:12.5px;line-height:1.7">${inline(line)}</p>`); i++;
+    }
+    return out.join('\n');
+}
+
+// ── HTML export builder for the AI report ─────────────────────────────────────
+function buildAnalyticsReportHtml(content: string, days: number, generatedAt: string): string {
+    const body = renderMd(content, true);
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Analytics Rules Assessment Report</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:0;margin:0;color:#1e293b;background:#f8fafc}
+  .page{max-width:960px;margin:0 auto;padding:48px 40px}
+  .report-header{background:linear-gradient(135deg,#D04A02 0%,#b83d01 100%);color:#fff;padding:32px 40px;margin:-48px -40px 36px}
+  .report-header h1{font-size:24px;font-weight:800;margin:0 0 6px;color:#fff}
+  .report-header .meta{font-size:12px;opacity:.85;margin:0}
+  .confidential{display:inline-block;margin-top:10px;padding:3px 10px;background:rgba(255,255,255,.2);border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+  h3{color:#D04A02;margin:28px 0 10px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid #D04A02;padding-bottom:6px}
+  h4{margin:18px 0 6px;font-size:13px;font-weight:700;color:#1e293b}
+  h5{margin:12px 0 4px;font-size:12px;font-weight:600;color:#64748b}
+  p{margin:5px 0;font-size:13px;line-height:1.7;color:#334155}
+  ul,ol{padding-left:22px;margin:8px 0}
+  li{margin:4px 0;font-size:13px;line-height:1.6}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin:12px 0}
+  th{padding:7px 12px;border:1px solid #e2e8f0;background:#f1f5f9;font-weight:700;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#475569}
+  td{padding:7px 12px;border:1px solid #e2e8f0;vertical-align:top;color:#334155}
+  tr:nth-child(even) td{background:#f8fafc}
+  code{background:#f1f5f9;padding:1px 6px;border-radius:3px;font-size:11px;font-family:monospace;color:#0f172a}
+  pre{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:12px 16px;font-size:12px;overflow-x:auto;margin:10px 0;white-space:pre-wrap;word-break:break-all}
+  strong{font-weight:700}em{font-style:italic}
+  div[style*="overflow-x:auto"]{overflow-x:auto}
+  .footer{margin-top:40px;padding-top:16px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;font-size:11px;color:#94a3b8}
+  @media print{.report-header{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="report-header">
+    <h1>Analytics Rules Assessment Report</h1>
+    <p class="meta">Period: Last ${days} days &nbsp;·&nbsp; Generated: ${new Date(generatedAt).toLocaleString()}</p>
+    <span class="confidential">Confidential — Internal Use Only</span>
+  </div>
+  <div class="report-body">${body}</div>
+  <div class="footer">
+    <span>Sentinel Vigil · Microsoft Sentinel</span>
+    <span>Analytics Rules Assessment · ${new Date(generatedAt).toLocaleString()}</span>
+  </div>
+</div>
+</body>
+</html>`;
+}
+
+// ── Rule Detail Panel ─────────────────────────────────────────────────────────
+interface PanelProps { rule: Rule; days: number; onClose: () => void; }
+
+function RuleDetailPanel({ rule, days, onClose }: PanelProps) {
+    const [detail, setDetail]           = useState<RuleDetail | null>(null);
+    const [detailLoading, setDetailLoading] = useState(true);
+    const [detailTab, setDetailTab]     = useState<'properties' | 'tune'>('properties');
+    const [suggestion, setSuggestion]   = useState<TuneSuggestion | null>(null);
+    const [tuning, setTuning]           = useState(false);
+    const [tuneSuccess, setTuneSuccess] = useState<boolean | null>(null);
+    const [tuneError, setTuneError]     = useState<string | null>(null);
+    const [copied, setCopied]           = useState(false);
+
+    useEffect(() => {
+        setDetail(null); setSuggestion(null); setTuneError(null); setTuneSuccess(null);
+        setDetailTab('properties'); setDetailLoading(true);
+        axios.get(`/api/analytics-rules/rule-detail?name=${encodeURIComponent(rule.name)}&days=${days}`, { timeout: 0 })
+            .then(r => setDetail(r.data))
+            .catch(e => console.error('Rule detail fetch failed:', e))
+            .finally(() => setDetailLoading(false));
+    }, [rule.name, days]);
+
+    const getTuneSuggestion = async () => {
+        setTuning(true); setTuneError(null); setTuneSuccess(null); setSuggestion(null);
+        try {
+            const res = await axios.post('/api/analytics-rules/tune-suggestion', {
+                rule_name:         rule.name,
+                kql_query:         detail?.definition?.query ?? '',
+                incident_comments: detail?.incident_comments ?? [],
+                alert_count:       rule.alert_count,
+                severity:          rule.severity,
+                description:       detail?.definition?.description ?? '',
+            }, { timeout: 0 });
+            setSuggestion(res.data);
+            setTuneSuccess(true);
+            setDetailTab('tune');
+        } catch (e: any) {
+            setTuneError(e.response?.data?.detail || e.message || 'Suggestion failed');
+            setTuneSuccess(false);
+        } finally { setTuning(false); }
+    };
+
+    const copyKql = () => {
+        const q = detail?.definition?.query;
+        if (!q) return;
+        navigator.clipboard.writeText(q).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        });
+    };
+
+    const def = detail?.definition ?? {};
+    const hasKql = !!def.query;
+    const commentCount = detail?.incident_comments?.length ?? 0;
+
+    const tuneLogSteps: LogStep[] = commentCount > 0 ? [
+        { level: 'info', msg: 'Loading rule definition and KQL query…',     delay: 400  },
+        { level: 'info', msg: `Reviewing ${commentCount} incident comment${commentCount !== 1 ? 's' : ''}…`, delay: 2000 },
+        { level: 'info', msg: 'Identifying false positive patterns…',        delay: 4500 },
+        { level: 'ai',   msg: 'Running LLM analysis with Claude…',           delay: 7000 },
+        { level: 'ai',   msg: 'Generating evidence-based recommendations…',  delay: 11000 },
+    ] : [
+        { level: 'info', msg: 'Loading rule definition and KQL query…',     delay: 400  },
+        { level: 'info', msg: 'Analysing detection logic and coverage…',     delay: 2500 },
+        { level: 'info', msg: 'Checking for noise and over-broad patterns…', delay: 5000 },
+        { level: 'ai',   msg: 'Running LLM analysis with Claude…',           delay: 7500 },
+        { level: 'ai',   msg: 'Generating KQL optimisation recommendations…',delay: 11000 },
+    ];
+
+    return (
+        <div style={{
+            border: '1.5px solid var(--border-color)', borderRadius: 12,
+            background: 'var(--bg-card)', overflow: 'hidden',
+            display: 'flex', flexDirection: 'column',
+            position: 'sticky', top: 16, maxHeight: 'calc(100vh - 120px)',
+        }}>
+            {/* ── Panel header ── */}
+            <div style={{
+                padding: '14px 16px 12px',
+                background: 'var(--bg-higher)',
+                borderBottom: '1px solid var(--border-color)',
+            }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                            {rule.name}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                            <span className={`badge ${sevBadge(rule.severity)}`}>{rule.severity}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                {rule.alert_count.toLocaleString()} alerts
+                            </span>
+                            {rule.linked_incidents > 0 && (
+                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                    · {rule.linked_incidents} incidents
+                                </span>
+                            )}
+                            {commentCount > 0 && (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, fontWeight: 700, color: 'var(--brand)', background: 'var(--pwc-orange-light)', padding: '1px 7px', borderRadius: 10 }}>
+                                    <FontAwesomeIcon icon={faCommentDots} style={{ fontSize: 9 }} />
+                                    {commentCount} comment{commentCount !== 1 ? 's' : ''}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                    <button onClick={onClose} className="btn btn-sm btn-ghost" style={{ flexShrink: 0, padding: '4px 7px' }}>
+                        <FontAwesomeIcon icon={faXmark} />
+                    </button>
+                </div>
+
+                {/* Tabs */}
+                <div style={{ display: 'flex', gap: 4, marginTop: 12 }}>
+                    {(['properties', 'tune'] as const).map(t => (
+                        <button key={t} onClick={() => setDetailTab(t)}
+                            style={{
+                                padding: '5px 12px', fontSize: 11, fontWeight: 600,
+                                cursor: 'pointer', borderRadius: 6, transition: 'all 0.15s',
+                                background: detailTab === t ? 'var(--brand)' : 'var(--bg-surface)',
+                                color: detailTab === t ? '#fff' : 'var(--text-muted)',
+                                border: detailTab === t ? 'none' : '1px solid var(--border-color)',
+                            }}>
+                            {t === 'properties' ? (
+                                <><FontAwesomeIcon icon={faCode} style={{ marginRight: 5 }} />Properties</>
+                            ) : (
+                                <><FontAwesomeIcon icon={faWandMagicSparkles} style={{ marginRight: 5 }} />AI Tune</>
+                            )}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* ── Panel body ── */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+                {detailLoading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text-muted)', padding: '20px 0' }}>
+                        <FontAwesomeIcon icon={faSpinner} spin style={{ color: 'var(--brand)' }} />
+                        <span style={{ fontSize: 12 }}>Loading rule details…</span>
+                    </div>
+                ) : detailTab === 'properties' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                        {/* Firing stats */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                            {[
+                                { label: 'First Fired', val: rule.first_fired ? new Date(rule.first_fired).toLocaleDateString() : '—' },
+                                { label: 'Last Fired',  val: rule.last_fired  ? new Date(rule.last_fired).toLocaleDateString()  : '—' },
+                            ].map(s => (
+                                <div key={s.label} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 7, padding: '8px 10px' }}>
+                                    <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{s.label}</div>
+                                    <div style={{ fontSize: 12, fontWeight: 700 }}>{s.val}</div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Rule definition (from Sentinel API) */}
+                        {def.description && (
+                            <div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>Description</div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.6 }}>{def.description}</div>
+                            </div>
+                        )}
+
+                        {(def.tactics?.length || def.techniques?.length) ? (
+                            <div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>MITRE ATT&amp;CK</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                                    {def.tactics?.map(t => (
+                                        <span key={t} style={{ fontSize: 10, fontWeight: 700, background: 'rgba(208,74,2,0.1)', color: 'var(--brand)', padding: '2px 8px', borderRadius: 10 }}>{t}</span>
+                                    ))}
+                                    {def.techniques?.map(t => (
+                                        <code key={t} style={{ fontSize: 10, background: 'var(--bg-surface)', color: 'var(--text-muted)', padding: '2px 6px', borderRadius: 4 }}>{t}</code>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null}
+
+                        {(def.query_frequency || def.query_period || def.trigger_threshold !== undefined) && (
+                            <div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 5 }}>Rule Configuration</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {[
+                                        { label: 'Run frequency',  val: isoToHuman(def.query_frequency ?? '') },
+                                        { label: 'Lookup period',  val: isoToHuman(def.query_period ?? '') },
+                                        { label: 'Trigger',        val: def.trigger_operator ? `${def.trigger_operator} ${def.trigger_threshold ?? 0}` : '—' },
+                                        { label: 'Suppression',    val: def.suppression_enabled ? isoToHuman(def.suppression_duration ?? '') : 'Off' },
+                                    ].filter(r => r.val && r.val !== '—').map(r => (
+                                        <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '3px 0', borderBottom: '1px solid var(--border-subtle)' }}>
+                                            <span style={{ color: 'var(--text-muted)' }}>{r.label}</span>
+                                            <span style={{ fontWeight: 600 }}>{r.val}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* KQL Query */}
+                        <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>KQL Query</div>
+                                {hasKql && (
+                                    <button onClick={copyKql} className="btn btn-sm btn-ghost" style={{ fontSize: 10, padding: '2px 8px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                                        <FontAwesomeIcon icon={copied ? faCheck : faCopy} style={{ color: copied ? 'var(--low)' : undefined }} />
+                                        {copied ? 'Copied' : 'Copy'}
+                                    </button>
+                                )}
+                            </div>
+                            {hasKql ? (
+                                <pre style={{
+                                    background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                                    borderRadius: 7, padding: '10px 12px', fontSize: 11,
+                                    fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'pre-wrap',
+                                    wordBreak: 'break-all', color: 'var(--text-primary)', lineHeight: 1.65,
+                                    maxHeight: 280, overflowY: 'auto', margin: 0,
+                                }}>
+                                    {def.query}
+                                </pre>
+                            ) : (
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic', padding: '8px 0' }}>
+                                    KQL not available — this may be a built-in or Microsoft-managed rule. Configure Resource Group and Workspace Name in Settings to enable rule definition fetching.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Alert samples */}
+                        {detail?.alert_samples && detail.alert_samples.length > 0 && (
+                            <div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                                    Recent Alerts ({detail.alert_samples.length})
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    {detail.alert_samples.map((s, i) => (
+                                        <div key={i} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 7, padding: '8px 10px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                                                <span className={`badge ${sevBadge(s.severity)}`} style={{ fontSize: 9 }}>{s.severity}</span>
+                                                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{s.time ? new Date(s.time).toLocaleString() : '—'}</span>
+                                            </div>
+                                            {s.description && <div style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{s.description.slice(0, 180)}{s.description.length > 180 ? '…' : ''}</div>}
+                                            {s.tactics && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>{s.tactics}</div>}
+                                            {s.entities && s.entities.length > 0 && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                                                    {s.entities.map((e, ei) => (
+                                                        <span key={ei} style={{
+                                                            fontSize: 10, padding: '1px 7px', borderRadius: 10,
+                                                            background: 'var(--bg-higher)', border: '1px solid var(--border-color)',
+                                                            color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: 3,
+                                                        }}>
+                                                            <span style={{ color: 'var(--brand)', fontWeight: 700, fontSize: 9, textTransform: 'uppercase' }}>{e.type}</span>
+                                                            <span>{e.name}</span>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Incident comments */}
+                        {commentCount > 0 && (
+                            <div>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                                    Incident Comments ({commentCount})
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    {detail!.incident_comments.map((c, i) => (
+                                        <div key={i} style={{ background: 'rgba(208,74,2,0.04)', border: '1px solid rgba(208,74,2,0.18)', borderRadius: 7, padding: '8px 10px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, flexWrap: 'wrap', gap: 4 }}>
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--brand)' }}>#{c.incident_number}</span>
+                                                <div style={{ display: 'flex', gap: 5 }}>
+                                                    <span className={`badge ${sevBadge(c.severity)}`} style={{ fontSize: 9 }}>{c.severity}</span>
+                                                    <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>{c.status}</span>
+                                                </div>
+                                            </div>
+                                            <div
+                                                style={{ fontSize: 11, color: 'var(--text-secondary)', lineHeight: 1.55 }}
+                                                dangerouslySetInnerHTML={{ __html: renderMd(c.comment) }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {!detailLoading && !def.query && detail?.alert_samples?.length === 0 && commentCount === 0 && (
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>
+                                No additional detail available for this rule in the selected period.
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    /* ── AI Tune tab ── */
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                        {/* Context badge */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Suggestion basis:</span>
+                            {commentCount > 0 ? (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--brand)', background: 'rgba(208,74,2,0.08)', padding: '3px 10px', borderRadius: 10 }}>
+                                    <FontAwesomeIcon icon={faCommentDots} style={{ fontSize: 10 }} />
+                                    {commentCount} incident comment{commentCount !== 1 ? 's' : ''}
+                                </span>
+                            ) : (
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', background: 'var(--bg-surface)', padding: '3px 10px', borderRadius: 10, border: '1px solid var(--border)' }}>
+                                    <FontAwesomeIcon icon={faCode} style={{ fontSize: 10 }} />
+                                    General KQL analysis
+                                </span>
+                            )}
+                        </div>
+
+                        {commentCount === 0 && (
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', lineHeight: 1.6 }}>
+                                No incident comments found for this rule. Suggestions will be based on a general KQL quality and best-practice analysis.
+                            </div>
+                        )}
+
+                        {!suggestion && (
+                            <button
+                                className="btn btn-primary"
+                                onClick={getTuneSuggestion}
+                                disabled={tuning}
+                                style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}
+                            >
+                                <FontAwesomeIcon icon={tuning ? faSpinner : faWandMagicSparkles} spin={tuning} />
+                                {tuning ? 'Analysing with Claude…' : 'Get Fine-Tuning Suggestions'}
+                            </button>
+                        )}
+
+                        <ReportLogPanel
+                            steps={tuneLogSteps}
+                            loading={tuning}
+                            success={tuneSuccess}
+                            error={tuneError}
+                            successMsg="Fine-tuning suggestions generated"
+                        />
+
+                        {suggestion && (
+                            <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, fontWeight: 700, color: suggestion.based_on === 'incident_comments' ? 'var(--brand)' : 'var(--text-muted)', background: suggestion.based_on === 'incident_comments' ? 'rgba(208,74,2,0.08)' : 'var(--bg-surface)', padding: '3px 9px', borderRadius: 10, border: '1px solid var(--border)' }}>
+                                        <FontAwesomeIcon icon={suggestion.based_on === 'incident_comments' ? faCommentDots : faCode} style={{ fontSize: 9 }} />
+                                        Based on {suggestion.based_on === 'incident_comments' ? 'incident comments' : 'general KQL analysis'}
+                                    </span>
+                                    <button className="btn btn-sm btn-ghost" onClick={getTuneSuggestion} disabled={tuning} style={{ fontSize: 11 }}>
+                                        <FontAwesomeIcon icon={faRefresh} spin={tuning} style={{ marginRight: 4 }} />Refresh
+                                    </button>
+                                </div>
+                                <div
+                                    style={{ lineHeight: 1.7 }}
+                                    dangerouslySetInnerHTML={{ __html: renderMd(suggestion.suggestion) }}
+                                />
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ── AI Bulk Report Panel ──────────────────────────────────────────────────────
+interface TokenUsage { input_tokens: number; output_tokens: number; model: string; }
+
+const REPORT_LOG_STEPS = [
+    { level: 'info' as const, msg: 'Connecting to Sentinel workspace…',                      delay: 400  },
+    { level: 'info' as const, msg: 'Loading active rule inventory and alert volumes…',       delay: 2500 },
+    { level: 'info' as const, msg: 'Fetching MITRE ATT&CK tactic distribution…',            delay: 5000 },
+    { level: 'info' as const, msg: 'Pulling rule definitions and KQL queries…',             delay: 8000 },
+    { level: 'info' as const, msg: 'Analysing alert trends and silent rule coverage…',      delay: 11500 },
+    { level: 'ai'   as const, msg: 'Running LLM analysis with Claude…',                     delay: 14500 },
+    { level: 'ai'   as const, msg: 'Generating rule recommendations and MITRE scorecard…',  delay: 22000 },
+    { level: 'ai'   as const, msg: 'Finalising prioritised action plan…',                   delay: 30000 },
+];
+
+function AiReportPanel({ days }: { days: number }) {
+    const [loading,  setLoading]  = useState(false);
+    const [success,  setSuccess]  = useState<boolean | null>(null);
+    const [report,   setReport]   = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
+    const [error,    setError]    = useState<string | null>(null);
+    const [expanded, setExpanded] = useState(true);
+
+    const generate = async () => {
+        setLoading(true); setError(null); setReport(null); setSuccess(null);
+        try {
+            const res = await axios.get(`/api/analytics-rules/report?days=${days}`, { timeout: 0 });
+            setReport(res.data);
+            setExpanded(true);
+            setSuccess(true);
+        } catch (e: any) {
+            setError(e.response?.data?.detail || e.message || 'Report generation failed');
+            setSuccess(false);
+        } finally { setLoading(false); }
+    };
+
+    const doExport = async (format: 'html' | 'pdf') => {
+        if (!report) return;
+        const html = buildAnalyticsReportHtml(report.llm_analysis, days, report.generated_at);
+        try {
+            const endpoint = format === 'pdf' ? '/api/reports/export-pdf' : '/api/reports/export-html';
+            const res = await axios.post(endpoint,
+                { html, filename: `Analytics_Rules_Report_${days}d.${format}` },
+                { responseType: 'blob' });
+            const url = window.URL.createObjectURL(new Blob([res.data]));
+            const a = document.createElement('a'); a.href = url;
+            a.download = `Analytics_Rules_Report_${days}d.${format}`; a.click(); a.remove();
+        } catch (e: any) { setError(`Export failed: ${e.message}`); }
+    };
+
+    return (
+        <div className="card" style={{ border: '1.5px solid var(--brand)', marginBottom: 0 }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: report ? 12 : 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <FontAwesomeIcon icon={faRobot} style={{ color: 'var(--brand)', fontSize: 18 }} />
+                    <div>
+                        <div style={{ fontWeight: 700, fontSize: 14 }}>AI Analytics Rules Assessment Report</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            LLM-powered analysis across all detection rules, MITRE coverage, and alert volumes — last {days} days
+                        </div>
+                    </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    {report && (
+                        <>
+                            <button className="btn btn-sm btn-ghost" onClick={() => doExport('html')}>
+                                <FontAwesomeIcon icon={faFileCode} style={{ color: 'var(--info)' }} /> HTML
+                            </button>
+                            <button className="btn btn-sm btn-ghost" onClick={() => doExport('pdf')}>
+                                <FontAwesomeIcon icon={faFilePdf} style={{ color: 'var(--critical)' }} /> PDF
+                            </button>
+                            <button className="btn btn-sm btn-ghost" onClick={() => setExpanded(v => !v)}>
+                                <FontAwesomeIcon icon={expanded ? faChevronUp : faChevronDown} />
+                            </button>
+                        </>
+                    )}
+                    <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
+                        <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
+                        {loading ? 'Generating…' : report ? 'Regenerate' : 'Generate Report'}
+                    </button>
+                </div>
+            </div>
+
+            <ReportLogPanel
+                steps={REPORT_LOG_STEPS}
+                loading={loading}
+                success={success}
+                error={error}
+                successMsg="Analytics rules report generated"
+            />
+
+            {error && !loading && (
+                <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, fontSize: 12, color: 'var(--critical)' }}>
+                    <FontAwesomeIcon icon={faCircleXmark} style={{ marginRight: 8 }} />{error}
+                </div>
+            )}
+
+            {report && expanded && (
+                <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 14, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                            Generated {new Date(report.generated_at).toLocaleString()}
+                        </span>
+                        {report.token_usage && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, fontFamily: 'monospace', background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 8px', color: 'var(--text-muted)' }}>
+                                <FontAwesomeIcon icon={faBolt} style={{ color: '#f59e0b', fontSize: 9 }} />
+                                <span style={{ color: 'var(--info)' }}>{report.token_usage.input_tokens.toLocaleString()}</span>
+                                <span>in</span>
+                                <span style={{ opacity: 0.5 }}>→</span>
+                                <span style={{ color: '#27ae60' }}>{report.token_usage.output_tokens.toLocaleString()}</span>
+                                <span>out</span>
+                                <span style={{ opacity: 0.4 }}>·</span>
+                                <span style={{ opacity: 0.7 }}>{report.token_usage.model}</span>
+                            </span>
+                        )}
+                    </div>
+                    <div
+                        style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 10, padding: '20px 24px', lineHeight: 1.7 }}
+                        dangerouslySetInnerHTML={{ __html: renderMd(report.llm_analysis) }}
+                    />
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
 export default function AnalyticsRules() {
-    const [tab, setTab] = useState<'activity' | 'tactic' | 'trend' | 'silent'>('activity');
+    const [tab, setTab] = useState<'activity' | 'tactic' | 'trend' | 'silent' | 'report'>('activity');
     const [days, setDays] = useState(30);
     const [overview, setOverview] = useState<Overview | null>(null);
     const [rules, setRules] = useState<Rule[]>([]);
@@ -37,6 +692,7 @@ export default function AnalyticsRules() {
     const [isExporting, setIsExporting] = useState(false);
     const [search, setSearch] = useState('');
     const [sevFilter, setSevFilter] = useState('All');
+    const [selectedRule, setSelectedRule] = useState<Rule | null>(null);
 
     const fetchData = async () => {
         setLoading(true);
@@ -61,6 +717,9 @@ export default function AnalyticsRules() {
     };
 
     useEffect(() => { fetchData(); }, [days]);
+
+    // When days change or tab changes away from activity, close the panel
+    useEffect(() => { if (tab !== 'activity') setSelectedRule(null); }, [tab]);
 
     const filteredRules = useMemo(() =>
         rules.filter(r =>
@@ -171,10 +830,11 @@ export default function AnalyticsRules() {
                         {/* Tabs */}
                         <div className="tabs" style={{ marginBottom: 0 }}>
                             {([
-                                { id: 'activity', label: 'Rule Activity', icon: faListCheck },
-                                { id: 'tactic', label: 'MITRE Tactics', icon: faShieldHalved },
-                                { id: 'trend', label: 'Alert Trend', icon: faChartBar },
-                                { id: 'silent', label: 'Silent Rules', icon: faBellSlash },
+                                { id: 'activity', label: 'Rule Activity',   icon: faListCheck },
+                                { id: 'tactic',   label: 'MITRE Tactics',   icon: faShieldHalved },
+                                { id: 'trend',    label: 'Alert Trend',     icon: faChartBar },
+                                { id: 'silent',   label: 'Silent Rules',    icon: faBellSlash },
+                                { id: 'report',   label: 'AI Report',       icon: faRobot },
                             ] as const).map(t => (
                                 <button key={t.id} className={`tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
                                     <FontAwesomeIcon icon={t.icon} style={{ marginRight: 8 }} />{t.label}
@@ -185,61 +845,97 @@ export default function AnalyticsRules() {
                             ))}
                         </div>
 
-                        {/* Rule Activity */}
+                        {/* Rule Activity — split layout when a rule is selected */}
                         {tab === 'activity' && (
-                            <div className="card" style={{ padding: 0 }}>
-                                <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                                    <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
-                                        <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
-                                        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search rules…"
-                                            style={{ width: '100%', paddingLeft: 30, paddingRight: 10, padding: '7px 10px 7px 28px', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12, background: 'var(--bg-input)', color: 'var(--text-primary)', boxSizing: 'border-box' }} />
-                                    </div>
-                                    <div style={{ display: 'flex', gap: 6 }}>
-                                        {(['All', 'High', 'Medium', 'Low', 'Informational'] as const).map(s => (
-                                            <button key={s} onClick={() => setSevFilter(s)}
-                                                className={`btn btn-sm ${sevFilter === s ? 'btn-primary' : 'btn-ghost'}`}
-                                                style={{ borderRadius: 6, fontSize: 11, padding: '4px 10px' }}>
-                                                {s}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 'auto' }}>{filteredRules.length} rules</span>
-                                </div>
-                                <div className="data-table-wrap">
-                                    <table className="data-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Rule Name</th>
-                                                <th style={{ width: 90 }}>Severity</th>
-                                                <th style={{ width: 90 }}>Alerts</th>
-                                                <th style={{ width: 90 }}>Incidents</th>
-                                                <th>Volume</th>
-                                                <th style={{ width: 130 }}>Last Fired</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {filteredRules.map((r, i) => (
-                                                <tr key={i}>
-                                                    <td style={{ fontWeight: 600, fontSize: 12 }}>{r.name}</td>
-                                                    <td><span className={`badge ${sevBadge(r.severity)}`}>{r.severity}</span></td>
-                                                    <td style={{ fontWeight: 700, color: sevColor(r.severity) }}>{r.alert_count.toLocaleString()}</td>
-                                                    <td style={{ color: 'var(--text-muted)' }}>{r.linked_incidents.toLocaleString()}</td>
-                                                    <td style={{ width: 160 }}>
-                                                        <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4 }}>
-                                                            <div style={{ width: `${(r.alert_count / maxAlerts) * 100}%`, height: '100%', background: sevColor(r.severity), borderRadius: 4, opacity: 0.85 }} />
-                                                        </div>
-                                                    </td>
-                                                    <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                                                        {r.last_fired ? new Date(r.last_fired).toLocaleDateString() : '—'}
-                                                    </td>
-                                                </tr>
+                            <div style={{ display: 'grid', gridTemplateColumns: selectedRule ? '1fr 400px' : '1fr', gap: 16, alignItems: 'start' }}>
+                                {/* Rules table */}
+                                <div className="card" style={{ padding: 0 }}>
+                                    <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
+                                            <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
+                                            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search rules…"
+                                                style={{ width: '100%', paddingLeft: 30, paddingRight: 10, padding: '7px 10px 7px 28px', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12, background: 'var(--bg-input)', color: 'var(--text-primary)', boxSizing: 'border-box' }} />
+                                        </div>
+                                        <div style={{ display: 'flex', gap: 6 }}>
+                                            {(['All', 'High', 'Medium', 'Low', 'Informational'] as const).map(s => (
+                                                <button key={s} onClick={() => setSevFilter(s)}
+                                                    className={`btn btn-sm ${sevFilter === s ? 'btn-primary' : 'btn-ghost'}`}
+                                                    style={{ borderRadius: 6, fontSize: 11, padding: '4px 10px' }}>
+                                                    {s}
+                                                </button>
                                             ))}
-                                            {filteredRules.length === 0 && (
-                                                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No rules match the filter</td></tr>
-                                            )}
-                                        </tbody>
-                                    </table>
+                                        </div>
+                                        <span style={{ fontSize: 12, color: 'var(--text-muted)', marginLeft: 'auto' }}>{filteredRules.length} rules</span>
+                                    </div>
+                                    <div className="data-table-wrap">
+                                        <table className="data-table">
+                                            <thead>
+                                                <tr>
+                                                    <th></th>
+                                                    <th>Rule Name</th>
+                                                    <th style={{ width: 90 }}>Severity</th>
+                                                    <th style={{ width: 90 }}>Alerts</th>
+                                                    <th style={{ width: 90 }}>Incidents</th>
+                                                    {!selectedRule && <th>Volume</th>}
+                                                    <th style={{ width: 130 }}>Last Fired</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {filteredRules.map((r, i) => {
+                                                    const isSelected = selectedRule?.name === r.name;
+                                                    return (
+                                                        <tr key={i}
+                                                            onClick={() => setSelectedRule(isSelected ? null : r)}
+                                                            style={{
+                                                                cursor: 'pointer',
+                                                                background: isSelected ? 'rgba(208,74,2,0.06)' : undefined,
+                                                                borderLeft: isSelected ? '3px solid var(--brand)' : '3px solid transparent',
+                                                            }}
+                                                            onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--bg-surface)'; }}
+                                                            onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = ''; }}
+                                                        >
+                                                            <td style={{ padding: '8px 4px 8px 8px', width: 20 }}>
+                                                                <FontAwesomeIcon icon={faChevronRight} style={{ fontSize: 9, color: isSelected ? 'var(--brand)' : 'var(--text-muted)', opacity: isSelected ? 1 : 0.4, transform: isSelected ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+                                                            </td>
+                                                            <td style={{ fontWeight: 600, fontSize: 12 }}>{r.name}</td>
+                                                            <td><span className={`badge ${sevBadge(r.severity)}`}>{r.severity}</span></td>
+                                                            <td style={{ fontWeight: 700, color: sevColor(r.severity) }}>{r.alert_count.toLocaleString()}</td>
+                                                            <td style={{ color: 'var(--text-muted)' }}>{r.linked_incidents.toLocaleString()}</td>
+                                                            {!selectedRule && (
+                                                                <td style={{ width: 160 }}>
+                                                                    <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4 }}>
+                                                                        <div style={{ width: `${(r.alert_count / maxAlerts) * 100}%`, height: '100%', background: sevColor(r.severity), borderRadius: 4, opacity: 0.85 }} />
+                                                                    </div>
+                                                                </td>
+                                                            )}
+                                                            <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                                                {r.last_fired ? new Date(r.last_fired).toLocaleDateString() : '—'}
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                                {filteredRules.length === 0 && (
+                                                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>No rules match the filter</td></tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {!selectedRule && (
+                                        <div style={{ padding: '10px 20px', borderTop: '1px solid var(--border)', fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <FontAwesomeIcon icon={faChevronRight} style={{ fontSize: 9 }} />
+                                            Click any rule to view its KQL query, properties, and get AI fine-tuning suggestions
+                                        </div>
+                                    )}
                                 </div>
+
+                                {/* Detail panel */}
+                                {selectedRule && (
+                                    <RuleDetailPanel
+                                        rule={selectedRule}
+                                        days={days}
+                                        onClose={() => setSelectedRule(null)}
+                                    />
+                                )}
                             </div>
                         )}
 
@@ -280,9 +976,9 @@ export default function AnalyticsRules() {
                                         Severity Distribution
                                     </div>
                                     {[
-                                        { label: 'High', count: overview?.high_alerts ?? 0, color: 'var(--critical)' },
+                                        { label: 'High',   count: overview?.high_alerts ?? 0,   color: 'var(--critical)' },
                                         { label: 'Medium', count: overview?.medium_alerts ?? 0, color: 'var(--high)' },
-                                        { label: 'Low', count: overview?.low_alerts ?? 0, color: 'var(--low)' },
+                                        { label: 'Low',    count: overview?.low_alerts ?? 0,    color: 'var(--low)' },
                                     ].map(s => {
                                         const pct = (overview?.total_alerts ?? 0) > 0 ? (s.count / (overview?.total_alerts ?? 1)) * 100 : 0;
                                         return (
@@ -310,9 +1006,9 @@ export default function AnalyticsRules() {
                                 </div>
                                 <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
                                     {[
-                                        { label: 'High', color: 'var(--critical)' },
-                                        { label: 'Medium', color: 'var(--high)' },
-                                        { label: 'Low', color: 'var(--low)' },
+                                        { label: 'High',          color: 'var(--critical)' },
+                                        { label: 'Medium',        color: 'var(--high)' },
+                                        { label: 'Low',           color: 'var(--low)' },
                                         { label: 'Informational', color: 'var(--info)' },
                                     ].map(s => (
                                         <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
@@ -331,10 +1027,10 @@ export default function AnalyticsRules() {
                                                 return (
                                                     <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', height: `${h}px`, minHeight: 2, borderRadius: '3px 3px 0 0', overflow: 'hidden' }}
                                                         title={`${d.date}\nH:${d.High} M:${d.Medium} L:${d.Low}`}>
-                                                        <div style={{ flex: d.Informational, background: 'var(--info)', minHeight: d.Informational > 0 ? 1 : 0 }} />
-                                                        <div style={{ flex: d.Low, background: 'var(--low)', minHeight: d.Low > 0 ? 1 : 0 }} />
-                                                        <div style={{ flex: d.Medium, background: 'var(--high)', minHeight: d.Medium > 0 ? 1 : 0 }} />
-                                                        <div style={{ flex: d.High, background: 'var(--critical)', minHeight: d.High > 0 ? 1 : 0 }} />
+                                                        <div style={{ flex: d.Informational, background: 'var(--info)',     minHeight: d.Informational > 0 ? 1 : 0 }} />
+                                                        <div style={{ flex: d.Low,           background: 'var(--low)',      minHeight: d.Low > 0 ? 1 : 0 }} />
+                                                        <div style={{ flex: d.Medium,        background: 'var(--high)',     minHeight: d.Medium > 0 ? 1 : 0 }} />
+                                                        <div style={{ flex: d.High,          background: 'var(--critical)', minHeight: d.High > 0 ? 1 : 0 }} />
                                                     </div>
                                                 );
                                             })}
@@ -346,6 +1042,11 @@ export default function AnalyticsRules() {
                                     </div>
                                 )}
                             </div>
+                        )}
+
+                        {/* AI Report */}
+                        {tab === 'report' && (
+                            <AiReportPanel days={days} />
                         )}
 
                         {/* Silent Rules */}

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
     faCrosshairs, faPlay, faSearch, faCode, faXmark,
     faTriangleExclamation, faCircleCheck, faSpinner,
-    faFilter, faChevronRight, faFileLines
+    faFilter, faChevronRight, faFileLines, faBrain
 } from '@fortawesome/free-solid-svg-icons';
 
 interface HuntQuery {
@@ -25,6 +26,11 @@ interface HuntResult {
     row_count: number;
     status: 'completed' | 'error' | 'running';
     error?: string;
+}
+interface HuntAnalysis {
+    indication: string;
+    remediation: string[];
+    recommendations: string[];
 }
 
 function sevBadge(s: string) {
@@ -59,14 +65,18 @@ export default function ThreatHunting() {
     const [customResult, setCustomResult] = useState<HuntResult | null>(null);
     const [tab, setTab] = useState<'library' | 'custom'>('library');
     const [loading, setLoading] = useState(true);
-    const [reportLoading, setReportLoading] = useState(false);
-    const [reportError, setReportError] = useState<string | null>(null);
+    const [reportLoading, setReportLoading]   = useState(false);
+    const [reportSuccess, setReportSuccess]   = useState<boolean | null>(null);
+    const [reportError, setReportError]       = useState<string | null>(null);
+    const [huntAnalyses, setHuntAnalyses]     = useState<Record<string, HuntAnalysis>>({});
+    const [analyzingId, setAnalyzingId]       = useState<string | null>(null);
 
     const generateReport = async () => {
         setReportLoading(true);
         setReportError(null);
+        setReportSuccess(null);
         try {
-            const res = await axios.post(`/api/hunting/report?days=${days}`, {}, { responseType: 'blob' });
+            const res = await axios.post(`/api/hunting/report?days=${days}`, {}, { responseType: 'blob', timeout: 0 });
             const url = URL.createObjectURL(new Blob([res.data], { type: 'text/html' }));
             const a = document.createElement('a');
             a.href = url;
@@ -75,12 +85,24 @@ export default function ThreatHunting() {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+            setReportSuccess(true);
         } catch {
             setReportError('Report generation failed. Please try again.');
+            setReportSuccess(false);
         } finally {
             setReportLoading(false);
         }
     };
+
+    const HUNTING_LOG_STEPS: LogStep[] = [
+        { level: 'info', msg: 'Connecting to Sentinel workspace…',          delay: 400 },
+        { level: 'info', msg: 'Loading threat hunting library…',            delay: 2000 },
+        { level: 'info', msg: `Executing ${queries.length} hunt queries in batch…`, delay: 4000 },
+        { level: 'info', msg: 'Correlating MITRE ATT&CK coverage…',        delay: 9000 },
+        { level: 'info', msg: 'Aggregating and scoring hunt results…',      delay: 14000 },
+        { level: 'ai',   msg: 'Running LLM analysis with Claude…',          delay: 18000 },
+        { level: 'ai',   msg: 'Generating hunt report document…',           delay: 23000 },
+    ];
 
     useEffect(() => {
         Promise.all([
@@ -109,6 +131,23 @@ export default function ThreatHunting() {
             setResults(prev => ({ ...prev, [hunt.id]: { hunt_id: hunt.id, title: hunt.title, columns: [], rows: [], row_count: 0, status: 'error', error: e.message } }));
         } finally {
             setRunningId(null);
+        }
+    };
+
+    const analyzeHunt = async (hunt: HuntQuery, result: HuntResult) => {
+        setAnalyzingId(hunt.id);
+        try {
+            const res = await axios.post('/api/hunting/analyze', {
+                hunt_id: hunt.id,
+                rows: result.rows.slice(0, 20),
+                row_count: result.row_count,
+                days,
+            });
+            setHuntAnalyses(prev => ({ ...prev, [hunt.id]: res.data }));
+        } catch {
+            // silently ignore — user can retry
+        } finally {
+            setAnalyzingId(null);
         }
     };
 
@@ -157,24 +196,17 @@ export default function ThreatHunting() {
                                 <option value={30}>30 Days</option>
                             </select>
                         </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                            <button
-                                className="btn btn-primary"
-                                onClick={generateReport}
-                                disabled={reportLoading}
-                                title={`Run all ${queries.length} hunts and export a detailed HTML report`}
-                                style={{ display: 'flex', alignItems: 'center', gap: 8 }}
-                            >
-                                {reportLoading
-                                    ? <><FontAwesomeIcon icon={faSpinner} spin />Running {queries.length} hunts…</>
-                                    : <><FontAwesomeIcon icon={faFileLines} />Generate Hunt Report</>}
-                            </button>
-                            {reportError && (
-                                <span style={{ fontSize: 11, color: 'var(--critical)' }}>
-                                    <FontAwesomeIcon icon={faTriangleExclamation} style={{ marginRight: 4 }} />{reportError}
-                                </span>
-                            )}
-                        </div>
+                        <button
+                            className="btn btn-primary"
+                            onClick={generateReport}
+                            disabled={reportLoading}
+                            title={`Run all ${queries.length} hunts and export a detailed HTML report`}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                        >
+                            {reportLoading
+                                ? <><FontAwesomeIcon icon={faSpinner} spin />Running {queries.length} hunts…</>
+                                : <><FontAwesomeIcon icon={faFileLines} />Generate Hunt Report</>}
+                        </button>
                     </div>
                 </div>
 
@@ -188,6 +220,18 @@ export default function ThreatHunting() {
                     </button>
                 </div>
             </div>
+
+            {(reportLoading || reportSuccess !== null) && (
+                <div style={{ padding: '0 20px 4px' }}>
+                    <ReportLogPanel
+                        steps={HUNTING_LOG_STEPS}
+                        loading={reportLoading}
+                        success={reportSuccess}
+                        error={reportError}
+                        successMsg="Hunt report downloaded successfully"
+                    />
+                </div>
+            )}
 
             <div className="page-content">
                 {tab === 'library' && (
@@ -326,6 +370,18 @@ export default function ThreatHunting() {
                                             {currentResult.row_count === 0 && currentResult.status === 'completed' && (
                                                 <span style={{ fontSize: 11, color: 'var(--low)', marginLeft: 4 }}>No matches — environment appears clean</span>
                                             )}
+                                            {currentResult.row_count > 0 && currentResult.status === 'completed' && selectedHunt && !huntAnalyses[selectedHunt.id] && (
+                                                <button
+                                                    className="btn btn-sm btn-ghost"
+                                                    style={{ marginLeft: 'auto', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, borderColor: '#3b82f640', color: '#93c5fd' }}
+                                                    onClick={() => analyzeHunt(selectedHunt, currentResult)}
+                                                    disabled={analyzingId === selectedHunt.id}
+                                                >
+                                                    {analyzingId === selectedHunt.id
+                                                        ? <><FontAwesomeIcon icon={faSpinner} spin />Analysing…</>
+                                                        : <><FontAwesomeIcon icon={faBrain} />Analyse with AI</>}
+                                                </button>
+                                            )}
                                         </div>
                                         {currentResult.status === 'error' ? (
                                             <div style={{ padding: 20, color: 'var(--critical)', fontSize: 12 }}>
@@ -352,6 +408,67 @@ export default function ThreatHunting() {
                                                 </table>
                                             </div>
                                         ) : null}
+
+                                        {/* AI Analysis Panel */}
+                                        {selectedHunt && huntAnalyses[selectedHunt.id] && (() => {
+                                            const ai = huntAnalyses[selectedHunt.id];
+                                            return (
+                                                <div style={{
+                                                    margin: '0 16px 16px',
+                                                    padding: '16px 20px',
+                                                    background: 'linear-gradient(135deg, #0d1f3c 0%, #0a1628 100%)',
+                                                    border: '1px solid #1e40af40',
+                                                    borderLeft: '3px solid #3b82f6',
+                                                    borderRadius: '0 10px 10px 0',
+                                                }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                                                        <FontAwesomeIcon icon={faBrain} style={{ color: '#3b82f6', fontSize: 13 }} />
+                                                        <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#93c5fd', background: '#1e40af', padding: '2px 10px', borderRadius: 999 }}>AI Analysis</span>
+                                                        <span style={{ fontSize: 10, color: '#64748b' }}>Powered by Claude</span>
+                                                        <button
+                                                            className="btn btn-sm btn-ghost"
+                                                            style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 8px', color: '#3b82f6', borderColor: '#1e40af' }}
+                                                            onClick={() => analyzeHunt(selectedHunt, currentResult!)}
+                                                            disabled={analyzingId === selectedHunt.id}
+                                                            title="Re-run AI analysis"
+                                                        >
+                                                            {analyzingId === selectedHunt.id ? <FontAwesomeIcon icon={faSpinner} spin /> : '↻ Re-analyse'}
+                                                        </button>
+                                                    </div>
+
+                                                    {ai.indication && (
+                                                        <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.7, marginBottom: 14, padding: '8px 12px', background: '#0f172a40', borderRadius: 6 }}>
+                                                            {ai.indication}
+                                                        </div>
+                                                    )}
+
+                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                                                        <div>
+                                                            <div style={{ fontSize: 10, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Remediation Steps</div>
+                                                            <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                                                                {ai.remediation.map((step, i) => (
+                                                                    <li key={i} style={{ fontSize: 11, color: '#94a3b8', padding: '5px 0 5px 18px', position: 'relative', lineHeight: 1.5, borderBottom: i < ai.remediation.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                                                                        <span style={{ position: 'absolute', left: 0, color: '#3b82f6', fontWeight: 700 }}>→</span>
+                                                                        {step}
+                                                                    </li>
+                                                                ))}
+                                                            </ol>
+                                                        </div>
+                                                        <div>
+                                                            <div style={{ fontSize: 10, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Recommendations</div>
+                                                            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                                                                {ai.recommendations.map((rec, i) => (
+                                                                    <li key={i} style={{ fontSize: 11, color: '#94a3b8', padding: '5px 0 5px 18px', position: 'relative', lineHeight: 1.5, borderBottom: i < ai.recommendations.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                                                                        <span style={{ position: 'absolute', left: 0, color: '#3b82f6', fontWeight: 700 }}>→</span>
+                                                                        {rec}
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
                                     </div>
                                 )}
                             </div>

@@ -10,6 +10,8 @@
 .pytest_cache
 
 # Node dependencies (rebuilt in Docker stage)
+node_modules
+**/node_modules
 frontend/node_modules
 
 # Pre-existing dist (rebuilt in Docker stage)

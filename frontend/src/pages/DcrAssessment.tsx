@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
     faDatabase, faRobot, faCircleCheck, faCircleXmark,
     faTriangleExclamation, faChevronDown, faChevronUp,
@@ -203,20 +204,33 @@ function buildReportHtml(analysis: string, days: number, generatedAt: string): s
 // ── AI Report Panel ───────────────────────────────────────────────────────────
 interface TokenUsage { input_tokens: number; output_tokens: number; model: string; }
 
+const DCR_LOG_STEPS: LogStep[] = [
+    { level: 'info', msg: 'Connecting to Sentinel workspace…',            delay: 400 },
+    { level: 'info', msg: 'Fetching data collection rule inventory…',     delay: 2500 },
+    { level: 'info', msg: 'Pulling ingestion volume metrics…',            delay: 5000 },
+    { level: 'info', msg: 'Analysing table-level costs & anomalies…',     delay: 7500 },
+    { level: 'info', msg: 'Cross-referencing DCR configurations…',        delay: 10500 },
+    { level: 'ai',   msg: 'Running LLM analysis with Claude…',            delay: 13500 },
+    { level: 'ai',   msg: 'Generating optimisation recommendations…',     delay: 18000 },
+];
+
 function AiReportPanel({ days }: { days: number }) {
     const [loading, setLoading] = useState(false);
+    const [success, setSuccess] = useState<boolean | null>(null);
     const [report, setReport] = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState(true);
 
     const generate = async () => {
-        setLoading(true); setError(null); setReport(null);
+        setLoading(true); setError(null); setReport(null); setSuccess(null);
         try {
             const res = await axios.get(`/api/dcr/report?days=${days}`, { timeout: 0 });
             setReport(res.data);
             setExpanded(true);
+            setSuccess(true);
         } catch (e: any) {
             setError(e.response?.data?.detail || e.message || 'Report generation failed');
+            setSuccess(false);
         } finally { setLoading(false); }
     };
 
@@ -279,12 +293,7 @@ function AiReportPanel({ days }: { days: number }) {
                 </div>
             </div>
 
-            {loading && (
-                <div style={{ padding: '20px 0', display: 'flex', alignItems: 'center', gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
-                    <div className="spinner" />
-                    Gathering DCR telemetry and running LLM analysis — this may take 20–40 seconds…
-                </div>
-            )}
+            <ReportLogPanel steps={DCR_LOG_STEPS} loading={loading} success={success} error={error} />
 
             {error && (
                 <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, fontSize: 12, color: 'var(--critical)' }}>
@@ -373,18 +382,37 @@ export default function DcrAssessment() {
     const fetchData = async () => {
         setLoading(true); setError(null);
         try {
-            const [ov, rules, ing, errs, act] = await Promise.all([
-                axios.get(`/api/dcr/overview?days=${days}`),
-                axios.get('/api/dcr/rules'),
-                axios.get(`/api/dcr/ingestion?days=${days}`),
-                axios.get(`/api/dcr/errors?days=${days}`),
-                axios.get(`/api/dcr/activity?days=${days}`),
+            const [rules, ing, errs, act] = await Promise.all([
+                axios.get('/api/dcr/rules',                       { timeout: 0 }),
+                axios.get(`/api/dcr/ingestion?days=${days}`,      { timeout: 0 }),
+                axios.get(`/api/dcr/errors?days=${days}`,         { timeout: 0 }),
+                axios.get(`/api/dcr/activity?days=${days}`,       { timeout: 0 }),
             ]);
-            setOverview(ov.data);
-            setRulesData(rules.data);
-            setIngestion(ing.data);
-            setErrorsData(errs.data);
+            const rd: DcrRulesData  = rules.data;
+            const id: IngestionData = ing.data;
+            const ed: ErrorsData    = errs.data;
+            setRulesData(rd);
+            setIngestion(id);
+            setErrorsData(ed);
             setActivity(act.data.activity || []);
+            // Derive overview from individual responses — avoids a redundant
+            // /api/dcr/overview call that internally re-runs all the same queries.
+            const ingSum = id.summary ?? {} as IngestionData['summary'];
+            setOverview({
+                dcr_total:              rd.total,
+                dcr_succeeded:          rd.succeeded_count,
+                dcr_failed:             rd.failed_count,
+                dcr_with_transforms:    rd.with_transformations,
+                dcr_custom_streams:     rd.with_custom_streams,
+                total_data_flows:       rd.total_data_flows,
+                total_transformations:  rd.total_transformations,
+                ingestion_total_gb:     ingSum.total_gb     ?? 0,
+                ingestion_daily_avg_mb: ingSum.daily_avg_mb ?? 0,
+                ingestion_tables:       ingSum.table_count  ?? 0,
+                estimated_monthly_gb:   ingSum.estimated_monthly_gb ?? 0,
+                total_errors:           ed.total_errors,
+                affected_rules:         ed.affected_rules,
+            });
         } catch (e: any) {
             setError(e.response?.data?.detail || e.message || 'Failed to load DCR data');
         } finally { setLoading(false); }

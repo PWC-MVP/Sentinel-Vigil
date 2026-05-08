@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
     faBookOpen, faTableCells, faList, faClockRotateLeft,
     faCircleCheck, faCircleXmark, faTriangleExclamation,
@@ -295,18 +296,31 @@ function ScoreRing({ pct }: { pct: number }) {
 // ── AI Report Tab Content ─────────────────────────────────────────────────────
 interface TokenUsage { input_tokens: number; output_tokens: number; model: string; }
 
+const WORKBOOK_LOG_STEPS: LogStep[] = [
+    { level: 'info', msg: 'Connecting to Sentinel workspace…',            delay: 400 },
+    { level: 'info', msg: 'Enumerating workbook inventory…',              delay: 2500 },
+    { level: 'info', msg: 'Fetching workbook activity & usage data…',     delay: 5000 },
+    { level: 'info', msg: 'Analysing coverage matrix…',                   delay: 7500 },
+    { level: 'info', msg: 'Checking for stale & orphaned workbooks…',     delay: 10500 },
+    { level: 'ai',   msg: 'Running LLM analysis with Claude…',            delay: 13500 },
+    { level: 'ai',   msg: 'Generating coverage recommendations…',         delay: 18000 },
+];
+
 function AiReportTab() {
     const [loading, setLoading] = useState(false);
+    const [success, setSuccess] = useState<boolean | null>(null);
     const [report, setReport]   = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
     const [error, setError]     = useState<string | null>(null);
 
     const generate = async () => {
-        setLoading(true); setError(null); setReport(null);
+        setLoading(true); setError(null); setReport(null); setSuccess(null);
         try {
             const res = await axios.get('/api/workbooks/report?days=30', { timeout: 0 });
             setReport(res.data);
+            setSuccess(true);
         } catch (e: any) {
             setError(e.response?.data?.detail || e.message || 'Report generation failed');
+            setSuccess(false);
         } finally { setLoading(false); }
     };
 
@@ -388,15 +402,7 @@ function AiReportTab() {
                 </div>
             </div>
 
-            {loading && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '48px 0' }}>
-                    <div className="spinner spinner-lg" />
-                    <div style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center' }}>
-                        Analysing coverage matrix, workbook metadata and activity…
-                        <br /><span style={{ fontSize: 11 }}>This may take 20–40 seconds</span>
-                    </div>
-                </div>
-            )}
+            <ReportLogPanel steps={WORKBOOK_LOG_STEPS} loading={loading} success={success} error={error} />
 
             {error && (
                 <div style={{ padding: '12px 16px', background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, fontSize: 12, color: 'var(--critical)', marginBottom: 16 }}>

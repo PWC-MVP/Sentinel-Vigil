@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
     faWandMagicSparkles, faPlay, faCircleCheck, faCircleXmark,
     faChartPie, faListCheck, faFilePdf, faFileCode, faRefresh,
@@ -64,20 +65,33 @@ const CLASS_COLORS: Record<string, string> = {
 // ── AI Report Panel ───────────────────────────────────────────────────────────
 interface TokenUsage { input_tokens: number; output_tokens: number; model: string; }
 
+const AUTOMATION_LOG_STEPS: LogStep[] = [
+    { level: 'info', msg: 'Connecting to Sentinel workspace…',           delay: 400 },
+    { level: 'info', msg: 'Fetching automation rule telemetry…',         delay: 2500 },
+    { level: 'info', msg: 'Pulling playbook run statistics…',            delay: 5000 },
+    { level: 'info', msg: 'Querying SOAR incident metrics…',             delay: 7500 },
+    { level: 'info', msg: 'Analysing threat response patterns…',         delay: 10500 },
+    { level: 'ai',   msg: 'Running LLM analysis with Claude…',           delay: 13500 },
+    { level: 'ai',   msg: 'Structuring SOAR recommendations…',           delay: 18000 },
+];
+
 function AiReportPanel({ days }: { days: number }) {
     const [loading, setLoading]   = useState(false);
+    const [success, setSuccess]   = useState<boolean | null>(null);
     const [report, setReport]     = useState<{ llm_analysis: string; generated_at: string; token_usage?: TokenUsage } | null>(null);
     const [error, setError]       = useState<string | null>(null);
     const [expanded, setExpanded] = useState(true);
 
     const generate = async () => {
-        setLoading(true); setError(null); setReport(null);
+        setLoading(true); setError(null); setReport(null); setSuccess(null);
         try {
             const res = await axios.get(`/api/automation/report?days=${days}`, { timeout: 0 });
             setReport(res.data);
             setExpanded(true);
+            setSuccess(true);
         } catch (e: any) {
             setError(e.response?.data?.detail || e.message || 'Report generation failed');
+            setSuccess(false);
         } finally { setLoading(false); }
     };
 
@@ -144,12 +158,7 @@ function AiReportPanel({ days }: { days: number }) {
                 </div>
             </div>
 
-            {loading && (
-                <div style={{ padding: '20px 0', display: 'flex', alignItems: 'center', gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
-                    <div className="spinner" />
-                    Gathering telemetry from all APIs and running LLM analysis — this may take 20–40 seconds…
-                </div>
-            )}
+            <ReportLogPanel steps={AUTOMATION_LOG_STEPS} loading={loading} success={success} error={error} />
 
             {error && (
                 <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.25)', borderRadius: 8, fontSize: 12, color: 'var(--critical)' }}>

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from backend.services.sentinel import run_kql
 from backend.services.llm import complete
 from backend.config import settings
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -406,6 +407,22 @@ async def run_custom(payload: dict, days: int = Query(7)):
         }
 
 
+@router.post("/analyze")
+async def analyze_hunt_result(payload: dict):
+    """Generate AI analysis (indication, remediation, recommendations) for a completed hunt result."""
+    hunt_id = payload.get("hunt_id", "")
+    hunt = next((q for q in LIBRARY if q["id"] == hunt_id), None)
+    if not hunt:
+        raise HTTPException(status_code=404, detail=f"Hunt '{hunt_id}' not found")
+    row_count = payload.get("row_count", 0)
+    if row_count == 0:
+        return {"indication": "No findings detected — nothing to analyse.", "remediation": [], "recommendations": []}
+    rows = payload.get("rows", [])
+    days = payload.get("days", 7)
+    analysis = await _analyze_hunt_finding(hunt, rows, row_count, days)
+    return analysis
+
+
 # ── Automated Hunt Report ─────────────────────────────────────────────────────
 
 def _esc(s: Any) -> str:
@@ -427,7 +444,7 @@ def _cat_color(c: str) -> str:
     return _CAT_COLOR.get(c, "#64748b")
 
 
-async def _generate_ai_narrative(results: list, days: int, model: str) -> str:
+async def _generate_ai_narrative(results: list, days: int, model: str = None) -> str:
     """Call the LLM to produce a 2-3 paragraph executive narrative for the report."""
     with_hits = [r for r in results if r.get("row_count", 0) > 0]
     total_findings = sum(r.get("row_count", 0) for r in results)
@@ -458,7 +475,39 @@ async def _generate_ai_narrative(results: list, days: int, model: str) -> str:
     return result["text"]
 
 
-def _build_hunting_html_report(results: list, days: int, ai_narrative: str = "") -> str:  # noqa: C901
+async def _analyze_hunt_finding(hunt: dict, rows: list, row_count: int, days: int) -> dict:
+    """Generate structured AI analysis (indication, remediation, recommendations) for a single hunt finding."""
+    sample = rows[:5]
+    system = (
+        "You are a senior threat hunter and incident responder analyzing Microsoft Sentinel findings. "
+        "Respond ONLY with valid JSON (no markdown fences, no extra text) in exactly this format:\n"
+        '{"indication":"1-2 sentences on what this finding indicates and the likely threat scenario",'
+        '"remediation":["specific actionable step 1","specific actionable step 2","specific actionable step 3","specific actionable step 4"],'
+        '"recommendations":["detection or hardening improvement 1","detection or hardening improvement 2","detection or hardening improvement 3"]}'
+    )
+    user_msg = (
+        f"Hunt: {hunt['title']} ({hunt['mitre_technique']} — {hunt['mitre_tactic']})\n"
+        f"Category: {hunt['category']} | Severity: {hunt['severity']}\n"
+        f"Description: {hunt['description']}\n"
+        f"Findings: {row_count} row(s) detected over a {days}-day look-back\n"
+        f"Sample data (up to 5 rows):\n{json.dumps(sample, default=str)[:1200]}"
+    )
+    try:
+        result = await complete(system, user_msg)
+        text = result["text"].strip()
+        if "```" in text:
+            parts = text.split("```")
+            text = parts[1] if len(parts) > 1 else parts[0]
+            if text.startswith("json"):
+                text = text[4:].lstrip()
+        return json.loads(text)
+    except Exception as e:
+        logger.warning("AI hunt analysis failed for %s: %s", hunt.get("id", "?"), e)
+        return {"indication": "", "remediation": [], "recommendations": []}
+
+
+def _build_hunting_html_report(results: list, days: int, ai_narrative: str = "", per_hunt_analyses: dict | None = None) -> str:  # noqa: C901
+    _analyses = per_hunt_analyses or {}
     gen_at = datetime.now().strftime("%B %d, %Y at %H:%M UTC")
 
     # ── Aggregate stats ───────────────────────────────────────────────────────
@@ -592,6 +641,32 @@ def _build_hunting_html_report(results: list, days: int, ai_narrative: str = "")
             if rc > 0 else ""
         )
 
+        # AI analysis section — populated when per-hunt analysis was generated
+        ai_section = ""
+        ai = _analyses.get(r.get("id", ""))
+        if ai and rc > 0 and ai.get("indication"):
+            remediation_items = "".join(
+                f'<li>{_esc(str(step))}</li>' for step in ai.get("remediation", [])
+            )
+            recommendation_items = "".join(
+                f'<li>{_esc(str(rec_item))}</li>' for rec_item in ai.get("recommendations", [])
+            )
+            ai_section = (
+                f'<div class="ai-analysis">'
+                f'<div class="ai-header">'
+                f'<span class="ai-badge">AI Analysis</span>'
+                f'<span class="ai-model">Powered by Claude</span>'
+                f'</div>'
+                f'<div class="ai-indication">{_esc(ai["indication"])}</div>'
+                f'<div class="ai-cols">'
+                f'<div><div class="ai-section-title">Remediation Steps</div>'
+                f'<ol class="ai-list">{remediation_items or "<li>No steps available.</li>"}</ol></div>'
+                f'<div><div class="ai-section-title">Recommendations</div>'
+                f'<ul class="ai-list">{recommendation_items or "<li>No recommendations available.</li>"}</ul></div>'
+                f'</div>'
+                f'</div>'
+            )
+
         return f"""
     <div class="hunt-card" id="{_esc(r['id'])}">
       <div class="hunt-card-header">
@@ -610,6 +685,7 @@ def _build_hunting_html_report(results: list, days: int, ai_narrative: str = "")
       {status_note}
       {rec_section}
       {tbl}
+      {ai_section}
     </div>"""
 
     findings_section = "\n".join(_hunt_card(r) for r in sorted_with_hits) or (
@@ -660,6 +736,23 @@ def _build_hunting_html_report(results: list, days: int, ai_narrative: str = "")
             f'<pre class="kql-block">{_esc(r.get("query",""))}</pre>'
             f'</div>'
         )
+
+    # ── AI executive narrative card ───────────────────────────────────────────
+    if ai_narrative:
+        _paras = [p.strip() for p in ai_narrative.strip().split("\n\n") if p.strip()]
+        _paras_html = "".join(
+            f'<p style="font-size:13px;color:#cbd5e1;line-height:1.8;margin-bottom:10px">{_esc(p)}</p>'
+            for p in _paras
+        )
+        ai_exec_html = (
+            f'<div class="ai-exec-card">'
+            f'<div class="ai-header"><span class="ai-badge">AI Executive Narrative</span>'
+            f'<span class="ai-model">Powered by Claude</span></div>'
+            f'{_paras_html}'
+            f'</div>'
+        )
+    else:
+        ai_exec_html = ""
 
     # ── Table of contents ─────────────────────────────────────────────────────
     toc_items = "".join(
@@ -726,6 +819,18 @@ tr:hover td{{background:#263548}}
 .clean-list li{{background:#0f1f0f;border:1px solid #14532d30;border-radius:6px;padding:6px 12px;font-size:12px}}
 .empty-note{{color:#64748b;text-align:center;padding:40px;font-size:13px}}
 .kql-block{{background:#0a1120;border:1px solid #1e3a5f;border-radius:8px;padding:14px 16px;font-size:11px;font-family:'JetBrains Mono',monospace;white-space:pre-wrap;word-break:break-all;color:#93c5fd;line-height:1.6;margin-top:6px}}
+.ai-analysis{{margin:0 22px 18px;padding:16px 20px;background:linear-gradient(135deg,#0d1f3c 0%,#0a1628 100%);border:1px solid #1e40af40;border-left:3px solid #3b82f6;border-radius:0 10px 10px 0}}
+.ai-header{{display:flex;align-items:center;gap:10px;margin-bottom:12px}}
+.ai-badge{{display:inline-block;padding:3px 10px;border-radius:999px;background:#1e40af;color:#93c5fd;font-size:10px;font-weight:800;letter-spacing:0.05em;text-transform:uppercase}}
+.ai-model{{font-size:10px;color:#64748b}}
+.ai-indication{{font-size:12px;color:#cbd5e1;line-height:1.7;margin-bottom:14px;padding:10px 14px;background:#0f172a40;border-radius:6px}}
+.ai-cols{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+.ai-section-title{{font-size:10px;font-weight:800;color:#3b82f6;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px}}
+.ai-list{{list-style:none;padding:0;margin:0}}
+.ai-list li{{font-size:12px;color:#94a3b8;padding:5px 0 5px 18px;position:relative;line-height:1.5;border-bottom:1px solid #1e293b}}
+.ai-list li:last-child{{border-bottom:none}}
+.ai-list li::before{{content:"→";position:absolute;left:0;color:#3b82f6;font-weight:700}}
+.ai-exec-card{{background:linear-gradient(135deg,#0d1f3c 0%,#0a1628 100%);border:1px solid #1e40af40;border-left:3px solid #3b82f6;border-radius:0 10px 10px 0;padding:20px 24px;margin-top:16px}}
 @media print{{
   .sidebar,.topbar{{display:none!important}} .container{{display:block}} .content{{padding:20px}}
   body{{background:#fff;color:#000}} .card,.hunt-card,.kpi{{background:#f8fafc;border:1px solid #e2e8f0}}
@@ -775,6 +880,7 @@ tr:hover td{{background:#263548}}
         <span style="font-size:12px;color:#64748b;margin-right:8px">Severity breakdown:</span>
         {sev_pills if sev_pills else '<span style="color:#4ade80;font-size:12px">✓ No severity-flagged findings</span>'}
       </div>
+      {ai_exec_html}
     </section>
 
     <!-- 2. Threat Landscape -->
@@ -854,7 +960,26 @@ async def generate_hunting_report(days: int = Query(7)):
     logger.info("Starting automated hunt report: %d hunts, %dd look-back", len(LIBRARY), days)
     results = list(await asyncio.gather(*[_run_one(h) for h in LIBRARY]))
 
-    html = _build_hunting_html_report(results, days)
+    # Run AI narrative + per-hunt analyses in parallel after queries complete
+    with_hits_for_ai = [r for r in results if r.get("row_count", 0) > 0]
+    ai_narrative = ""
+    per_hunt_analyses: dict = {}
+    try:
+        ai_tasks = [_generate_ai_narrative(results, days)] + [
+            _analyze_hunt_finding(r, r.get("rows", []), r.get("row_count", 0), days)
+            for r in with_hits_for_ai
+        ]
+        ai_outputs = await asyncio.gather(*ai_tasks, return_exceptions=True)
+        if not isinstance(ai_outputs[0], Exception):
+            ai_narrative = ai_outputs[0]
+        for idx, r in enumerate(with_hits_for_ai):
+            out = ai_outputs[idx + 1]
+            if not isinstance(out, Exception):
+                per_hunt_analyses[r["id"]] = out
+    except Exception as e:
+        logger.warning("AI enrichment for report failed: %s", e)
+
+    html = _build_hunting_html_report(results, days, ai_narrative=ai_narrative, per_hunt_analyses=per_hunt_analyses)
 
     reports_dir = settings.OUTPUT_DIR
     reports_dir.mkdir(parents=True, exist_ok=True)

@@ -1454,6 +1454,23 @@ body {
   animation: fadeIn 0.25s ease;
 }
 
+@keyframes logSlideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.log-item {
+  animation: logSlideIn 0.18s ease-out forwards;
+  opacity: 0;
+}
+
+@keyframes enginePulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px currentColor; }
+  50%       { opacity: 0.5; box-shadow: none; }
+}
+.engine-dot-active {
+  animation: enginePulse 1.2s ease-in-out infinite;
+}
+
 /* ── Scrollbar ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 5px;
