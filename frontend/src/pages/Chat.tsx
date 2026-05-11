@@ -8,12 +8,10 @@ import {
     faBolt,
     faChartPie,
     faLock,
-    faGear,
     faTrash,
     faStop,
     faArrowUp,
     faCircleCheck,
-    faTriangleExclamation,
     faPlus,
     faPaperclip,
     faFilePdf,
@@ -21,9 +19,6 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 
 // ── Markdown renderer (simple, no deps) ─────────────────────────────────────
-// ... existing renderMarkdown and renderTable functions remain same or slightly adapted if needed ...
-// I'll keep the functions but check for icons inside them.
-
 function renderMarkdown(text: string): string {
     // 1. Pre-process Tables
     const lines = text.split('\n');
@@ -135,6 +130,12 @@ let msgCounter = 0;
 const uid = () => `msg-${++msgCounter}`;
 
 export default function Chat() {
+    const [toolCallExpanded, setToolCallExpanded] = useState<Record<string, boolean>>({});
+
+    const toggleToolCall = (key: string) => {
+        setToolCallExpanded(prev => ({ ...prev, [key]: !prev[key] }));
+    };
+
     const [messages, setMessages] = useState<ChatMsg[]>([
         {
             id: uid(),
@@ -470,23 +471,20 @@ What would you like to investigate?`,
             {/* ── LLM not configured warning ───────────────────── */}
             {llmStatus && !llmStatus.available && (
                 <div style={{
-                    margin: '0 24px',
-                    padding: '12px 16px',
-                    background: 'var(--risk-high-bg)',
-                    border: '1px solid rgba(230,126,34,0.3)',
+                    margin: '12px 24px 0',
+                    padding: '10px 16px',
+                    background: 'rgba(192,57,43,0.08)',
+                    border: '1px solid rgba(192,57,43,0.2)',
                     borderRadius: 'var(--radius-md)',
                     fontSize: 12,
-                    color: 'var(--high)',
+                    color: 'var(--critical)',
                     flexShrink: 0,
-                    marginTop: 12,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 10
                 }}>
-                    <FontAwesomeIcon icon={faTriangleExclamation} />
-                    <span>
-                        <strong>LLM not configured.</strong> Add your Azure OpenAI or OpenAI credentials to the <code>.env</code> file and restart the backend. See the Settings page for instructions.
-                    </span>
+                    <span>⚠</span>
+                    <span>AI assistant is currently unavailable. Check your LLM configuration in Settings.</span>
                 </div>
             )}
 
@@ -494,29 +492,50 @@ What would you like to investigate?`,
             <div className="chat-messages">
                 {messages.map(msg => (
                     <div key={msg.id} className={`chat-message ${msg.role}`}>
-                        <div className={`chat-avatar ${msg.role === 'assistant' ? 'aria' : 'user'}`}>
-                            {msg.role === 'assistant' ? <FontAwesomeIcon icon={faRobot} /> : 'You'}
-                        </div>
+                        {msg.role === 'user' ? (
+                            <div className="chat-avatar user" style={{ flexShrink: 0 }}>U</div>
+                        ) : (
+                            <div className="chat-avatar aria" style={{ flexShrink: 0 }}>A</div>
+                        )}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, position: 'relative' }}>
-                            {/* Tool calls */}
-                            {msg.toolCalls && msg.toolCalls.map((tc, i) => (
-                                <div key={i} className="tool-call-bubble">
-                                    <FontAwesomeIcon icon={faGear} spin style={{ color: 'var(--brand)' }} />
-                                    <span>Calling <strong>{tc.name}</strong>
-                                        {Object.keys(tc.args).length > 0 && (
-                                            <span style={{ opacity: 0.7 }}>
-                                                {' '}({Object.entries(tc.args).slice(0, 2).map(([k, v]) =>
-                                                    `${k}=${JSON.stringify(v)}`).join(', ')})
+                            {/* Tool calls — collapsible tool-call-section */}
+                            {msg.toolCalls && msg.toolCalls.map((tc, i) => {
+                                const tcKey = `${msg.id}-tc-${i}`;
+                                const isExpanded = !!toolCallExpanded[tcKey];
+                                const matchingResult = msg.toolResults?.[i];
+                                return (
+                                    <div key={i} className="tool-call-section">
+                                        <div className="tool-call-header" onClick={() => toggleToolCall(tcKey)}>
+                                            <span className="tool-call-name">{tc.name}</span>
+                                            <span style={{ fontSize: 11, color: 'var(--pwc-orange)' }}>
+                                                {isExpanded ? '▲ collapse' : '▼ expand'}
                                             </span>
+                                        </div>
+                                        {isExpanded && (
+                                            <div className="tool-call-body">
+                                                {Object.keys(tc.args).length > 0 && (
+                                                    <pre style={{ margin: '0 0 8px', fontSize: 11 }}>
+                                                        {JSON.stringify(tc.args, null, 2)}
+                                                    </pre>
+                                                )}
+                                                {matchingResult && (
+                                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: 6, marginTop: 4 }}>
+                                                        <FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--low)', marginRight: 6 }} />
+                                                        {matchingResult.result.slice(0, 400)}{matchingResult.result.length > 400 ? '…' : ''}
+                                                    </div>
+                                                )}
+                                            </div>
                                         )}
-                                    </span>
-                                </div>
-                            ))}
-                            {/* Tool results (collapsed) */}
-                            {msg.toolResults && msg.toolResults.map((tr, i) => (
-                                <div key={i} className="tool-result-bubble">
-                                    <FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--success)', marginRight: 6 }} />
-                                    {tr.name}: {tr.result.slice(0, 200)}{tr.result.length > 200 ? '…' : ''}
+                                    </div>
+                                );
+                            })}
+                            {/* Tool results not paired with tool calls */}
+                            {msg.toolResults && msg.toolResults.slice(msg.toolCalls?.length ?? 0).map((tr, i) => (
+                                <div key={`extra-${i}`} className="tool-call-section">
+                                    <div className="tool-call-header">
+                                        <span className="tool-call-name">{tr.name}</span>
+                                        <FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--low)', fontSize: 11 }} />
+                                    </div>
                                 </div>
                             ))}
                             {/* Message bubble */}
@@ -563,6 +582,19 @@ What would you like to investigate?`,
                         </div>
                     </div>
                 ))}
+                {/* Typing indicator — shown when streaming but no assistant content yet from the last user message */}
+                {streaming && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0' }}>
+                        <div className="chat-avatar aria" style={{ flexShrink: 0 }}>A</div>
+                        <div className="chat-bubble aria" style={{ padding: '10px 14px' }}>
+                            <div className="aria-typing">
+                                <div className="aria-typing-dot" />
+                                <div className="aria-typing-dot" />
+                                <div className="aria-typing-dot" />
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <div ref={messagesEndRef} />
             </div>
 
@@ -573,33 +605,29 @@ What would you like to investigate?`,
                     <div className="chat-suggestions">
                         {SUGGESTIONS.map((s, idx) => (
                             <button key={idx} className="chat-suggestion" onClick={() => sendMessage(s.label)}>
-                                <FontAwesomeIcon icon={s.icon} style={{ marginRight: 8, opacity: 0.8 }} />
+                                <FontAwesomeIcon icon={s.icon} style={{ marginRight: 6, opacity: 0.8 }} />
                                 {s.label}
                             </button>
                         ))}
                     </div>
                 )}
                 {fileStatus && (
-                    <div style={{
-                        margin: '0 auto 10px',
-                        maxWidth: 900,
-                        fontSize: 11,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '4px 12px',
-                        background: 'var(--pwc-orange-light)',
-                        borderRadius: 20,
-                        color: 'var(--pwc-orange)',
-                        width: 'fit-content'
-                    }}>
-                        <FontAwesomeIcon icon={faPaperclip} />
-                        <span>Attached: <strong>{fileStatus.name}</strong></span>
-                        <button style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 4px' }} onClick={() => {
-                            setFileStatus(null);
-                            setFileContent(null);
-                            if (fileRef.current) fileRef.current.value = '';
-                        }}>×</button>
+                    <div style={{ margin: '0 auto 10px', maxWidth: 900, display: 'flex', alignItems: 'center', gap: 8, width: 'fit-content' }}>
+                        <span className="badge badge-muted" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 20, fontSize: 11 }}>
+                            <FontAwesomeIcon icon={faPaperclip} />
+                            <span>Attached: <strong>{fileStatus.name}</strong></span>
+                            <button
+                                className="btn btn-ghost btn-sm"
+                                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: '0 2px', minWidth: 'unset', height: 'unset' }}
+                                onClick={() => {
+                                    setFileStatus(null);
+                                    setFileContent(null);
+                                    if (fileRef.current) fileRef.current.value = '';
+                                }}
+                            >
+                                ×
+                            </button>
+                        </span>
                     </div>
                 )}
                 <div className="chat-input-row">
@@ -607,7 +635,7 @@ What would you like to investigate?`,
                         className="btn btn-ghost btn-sm chat-attach-btn"
                         onClick={() => fileRef.current?.click()}
                         title="Upload document"
-                        style={{ height: 44, width: 44, borderRadius: '50%' }}
+                        style={{ height: 44, width: 44, borderRadius: '50%', flexShrink: 0 }}
                     >
                         <FontAwesomeIcon icon={faPlus} />
                     </button>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { http as axios } from '../api/client';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faChartBar, faClock, faUsers, faShieldHalved,
@@ -51,12 +52,6 @@ function sevColor(s: string) {
     return 'var(--info)';
 }
 
-function sevBg(s: string) {
-    if (s === 'High') return 'rgba(192,57,43,0.10)';
-    if (s === 'Medium') return 'rgba(230,126,34,0.10)';
-    if (s === 'Low') return 'rgba(39,174,96,0.10)';
-    return 'rgba(52,152,219,0.10)';
-}
 
 function formatHours(h: number) {
     if (h < 1) return `${Math.round(h * 60)}m`;
@@ -398,25 +393,21 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
 
                     {/* Status badges */}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: sevColor(incident.severity), background: sevBg(incident.severity), padding: '3px 12px', borderRadius: 20 }}>{incident.severity}</span>
-                        <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 12px', borderRadius: 20, color: incident.status === 'Closed' ? 'var(--low)' : 'var(--critical)', background: incident.status === 'Closed' ? 'rgba(39,174,96,0.10)' : 'rgba(192,57,43,0.10)' }}>{incident.status}</span>
+                        <span className={`badge badge-${incident.severity.toLowerCase()}`}>{incident.severity}</span>
+                        <span className={`badge ${incident.status === 'Closed' ? 'badge-low' : 'badge-critical'}`}>{incident.status}</span>
                         {(incident.mttr_hours ?? 0) > 0 && (
-                            <span style={{ fontSize: 12, color: 'var(--text-muted)', padding: '3px 12px', background: 'var(--bg-base)', borderRadius: 20, border: '1px solid var(--border)' }}>
+                            <span className="badge badge-muted">
                                 MTTR: {formatHours(incident.mttr_hours)}{incident.status !== 'Closed' ? ' (ongoing)' : ''}
                             </span>
                         )}
                     </div>
 
                     {/* Tab bar */}
-                    <div style={{ display: 'flex', gap: 2 }}>
+                    <div className="tabs" style={{ marginBottom: 0, gap: 2 }}>
                         {TABS.map(t => (
-                            <button key={t.id} onClick={() => setModalTab(t.id)} style={{
-                                padding: '7px 16px', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                                borderRadius: '6px 6px 0 0', transition: 'all 0.15s',
-                                background: modalTab === t.id ? 'var(--bg-card)' : 'transparent',
-                                color: modalTab === t.id ? 'var(--pwc-orange,var(--brand))' : 'var(--text-muted)',
-                                borderBottom: modalTab === t.id ? '2px solid var(--pwc-orange,var(--brand))' : '2px solid transparent',
-                            }}>
+                            <button key={t.id} onClick={() => setModalTab(t.id)}
+                                className={`tab ${modalTab === t.id ? 'active' : ''}`}
+                                style={{ borderRadius: '6px 6px 0 0' }}>
                                 {t.label}
                             </button>
                         ))}
@@ -592,7 +583,7 @@ function IncidentDetailModal({ incident, onClose }: { incident: Incident; onClos
                                         <div style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'flex-start', gap: 10 }} onClick={() => setExpandedAlert(expandedAlert === i ? null : i)}>
                                             <div style={{ flex: 1 }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                                                    <span style={{ fontSize: 11, fontWeight: 700, color: sevColor(alert.severity), background: sevBg(alert.severity), padding: '2px 8px', borderRadius: 10 }}>{alert.severity}</span>
+                                                    <span className={`badge badge-${alert.severity.toLowerCase()}`}>{alert.severity}</span>
                                                     {alert.provider && <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{alert.provider}</span>}
                                                     {alert.tactics && <span style={{ fontSize: 11, color: 'var(--high)', fontWeight: 600 }}>{alert.tactics}</span>}
                                                     <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>{fmtDate(alert.time)}</span>
@@ -1195,7 +1186,31 @@ export default function IncidentAnalytics() {
 
                         {/* ── MTTR ── */}
                         {tab === 'mttr' && (
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                {/* MTTR by Severity BarChart */}
+                                {(mttr?.by_severity ?? []).length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">MTTR by Severity (hours)</div>
+                                        <div className="chart-container chart-container-md">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={mttr!.by_severity} layout="vertical"
+                                                          margin={{ top: 0, right: 20, left: 80, bottom: 0 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F0F0F0" />
+                                                    <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                           label={{ value: 'Avg Hours', position: 'insideBottom', offset: -2, fontSize: 10 }} />
+                                                    <YAxis dataKey="severity" type="category" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={80} />
+                                                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(1)}h`, 'Avg MTTR']}
+                                                             contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Bar dataKey="avg_hours" name="Avg MTTR (h)" radius={[0, 4, 4, 0]}
+                                                         fill="#D04A02"
+                                                         label={{ position: 'right', fontSize: 10, fill: 'var(--text-muted)',
+                                                                  formatter: (v: any) => `${Number(v).toFixed(0)}h` }} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 20 }}>
                                 <div className="card">
                                     <div className="card-title">
                                         <FontAwesomeIcon icon={faClock} className="card-title-icon" />
@@ -1237,10 +1252,34 @@ export default function IncidentAnalytics() {
                                     )}
                                 </div>
                             </div>
+                            </div>
                         )}
 
                         {/* ── Daily Trends ── */}
                         {tab === 'trends' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                {/* Recharts LineChart */}
+                                {trends.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Daily Incident Trends</div>
+                                        <div className="chart-container chart-container-lg">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <LineChart data={trends} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                           tickFormatter={(d: string) => d.slice(5)} />
+                                                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                                                    <Line type="monotone" dataKey="High"          stroke="#E67E22" strokeWidth={2} dot={false} />
+                                                    <Line type="monotone" dataKey="Medium"        stroke="#D4AC0D" strokeWidth={2} dot={false} />
+                                                    <Line type="monotone" dataKey="Low"           stroke="#27AE60" strokeWidth={2} dot={false} />
+                                                    <Line type="monotone" dataKey="Informational" stroke="#2980B9" strokeWidth={2} dot={false} />
+                                                </LineChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
                             <div className="card">
                                 <div className="card-title">
                                     <FontAwesomeIcon icon={faChartBar} className="card-title-icon" />
@@ -1284,10 +1323,31 @@ export default function IncidentAnalytics() {
                                     </div>
                                 )}
                             </div>
+                            </div>
                         )}
 
                         {/* ── Owners ── */}
                         {tab === 'owners' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                {/* Owner Workload BarChart */}
+                                {owners.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Owner Workload</div>
+                                        <div className="chart-container chart-container-md">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={owners.slice(0, 10)} margin={{ top: 4, right: 16, left: -10, bottom: 40 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                                    <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} angle={-30} textAnchor="end" interval={0} />
+                                                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                                                    <Bar dataKey="open"   name="Open"   stackId="a" fill="#D04A02" />
+                                                    <Bar dataKey="closed" name="Closed" stackId="a" fill="#27AE60" radius={[4, 4, 0, 0]} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
                             <div className="card" style={{ padding: 0 }}>
                                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
@@ -1318,10 +1378,32 @@ export default function IncidentAnalytics() {
                                     </div>
                                 )}
                             </div>
+                            </div>
                         )}
 
                         {/* ── SLA ── */}
                         {tab === 'sla' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                {/* SLA Progress Cards */}
+                                {sla.length > 0 && sla.map((s) => (
+                                    <div key={s.severity} className="card" style={{ marginBottom: 0, padding: '14px 16px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                            <span className={`badge badge-${s.severity.toLowerCase()}`}>{s.severity}</span>
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: (s.compliance_rate >= 90) ? 'var(--low)' : (s.compliance_rate >= 70) ? 'var(--medium)' : 'var(--critical)' }}>
+                                                {s.compliance_rate?.toFixed(1)}% compliant
+                                            </span>
+                                        </div>
+                                        <div className="progress-bar-wrap" style={{ marginBottom: 8 }}>
+                                            <div className={`progress-bar-fill ${s.compliance_rate >= 90 ? 'green' : s.compliance_rate >= 70 ? 'yellow' : 'red'}`}
+                                                 style={{ width: `${s.compliance_rate || 0}%` }} />
+                                        </div>
+                                        <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--text-muted)' }}>
+                                            <span>Target: {s.sla_target_hours}h</span>
+                                            <span style={{ color: 'var(--low)' }}>Met: {s.sla_met}</span>
+                                            <span style={{ color: 'var(--critical)' }}>Breached: {s.sla_breached}</span>
+                                        </div>
+                                    </div>
+                                ))}
                             <div className="card" style={{ padding: 0 }}>
                                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
@@ -1369,6 +1451,7 @@ export default function IncidentAnalytics() {
                                     </div>
                                 )}
                             </div>
+                            </div>
                         )}
 
                         {/* ── Incidents ── */}
@@ -1379,12 +1462,7 @@ export default function IncidentAnalytics() {
                                     <div style={{ display: 'flex', gap: 8 }}>
                                         {(['all', 'open', 'closed'] as const).map(f => (
                                             <button key={f} onClick={() => setStatusFilter(f)}
-                                                style={{
-                                                    padding: '5px 14px', borderRadius: 20, border: '1px solid var(--border)',
-                                                    background: statusFilter === f ? 'var(--brand)' : 'var(--bg-card)',
-                                                    color: statusFilter === f ? '#fff' : 'var(--text-secondary)',
-                                                    fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s',
-                                                }}>
+                                                className={`chip ${statusFilter === f ? 'active' : ''}`}>
                                                 {f === 'all' ? `All (${incidents.length})` : f === 'open' ? `Open (${openCount})` : `Closed (${closedCount})`}
                                             </button>
                                         ))}
@@ -1451,7 +1529,7 @@ export default function IncidentAnalytics() {
                                                             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{inc.title}</div>
                                                             {inc.priority_reason && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.4 }}>{inc.priority_reason}</div>}
                                                         </div>
-                                                        <span style={{ fontSize: 11, fontWeight: 700, color: sevColor(inc.severity), background: sevBg(inc.severity), padding: '2px 8px', borderRadius: 10, flexShrink: 0 }}>{inc.severity}</span>
+                                                        <span className={`badge badge-${inc.severity.toLowerCase()}`} style={{ flexShrink: 0 }}>{inc.severity}</span>
                                                     </div>
                                                 );
                                             })}
@@ -1527,18 +1605,13 @@ export default function IncidentAnalytics() {
                                                                     </div>
                                                                 )}
                                                             </td>
-                                                            <td>
-                                                                <span style={{ fontSize: 11, fontWeight: 700, color: sevColor(inc.severity), background: sevBg(inc.severity), padding: '2px 8px', borderRadius: 10 }}>
+                                                                            <td>
+                                                                <span className={`badge badge-${inc.severity.toLowerCase()}`}>
                                                                     {inc.severity}
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <span style={{
-                                                                    fontSize: 11, fontWeight: 700,
-                                                                    color: inc.status === 'Closed' ? 'var(--low)' : 'var(--critical)',
-                                                                    background: inc.status === 'Closed' ? 'rgba(39,174,96,0.10)' : 'rgba(192,57,43,0.10)',
-                                                                    padding: '2px 8px', borderRadius: 10
-                                                                }}>
+                                                                <span className={`badge ${inc.status === 'Closed' ? 'badge-low' : 'badge-critical'}`}>
                                                                     {inc.status}
                                                                 </span>
                                                             </td>
@@ -1603,9 +1676,11 @@ export default function IncidentAnalytics() {
                                                             <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{fmtDate(r.last_seen)}</td>
                                                             <td style={{ fontSize: 12 }}>{r.avg_mttr >= 0 ? formatHours(r.avg_mttr) : '—'}</td>
                                                             <td style={{ fontSize: 11 }}>
-                                                                {(Array.isArray(r.severities) ? r.severities : []).map((s, j) => (
-                                                                    <span key={j} style={{ marginRight: 4, color: sevColor(s), fontWeight: 700 }}>{s}</span>
-                                                                ))}
+                                                                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                                                    {(Array.isArray(r.severities) ? r.severities : []).map((s, j) => (
+                                                                        <span key={j} className={`badge badge-${s.toLowerCase()}`} style={{ fontSize: 10 }}>{s}</span>
+                                                                    ))}
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     ))}
@@ -1638,9 +1713,9 @@ export default function IncidentAnalytics() {
                                             { label: 'Avg MTTR',          value: formatHours(mttr?.avg_hours ?? 0), color: 'var(--info)'  },
                                             { label: 'Recurring Titles',  value: recurrence.length,            color: 'var(--high)'     },
                                         ].map(item => (
-                                            <div key={item.label} style={{ background: 'var(--bg-card)', borderRadius: 8, padding: '10px 14px', border: '1px solid var(--border)' }}>
+                                            <div key={item.label} className="card" style={{ padding: '10px 14px' }}>
                                                 <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{item.label}</div>
-                                                <div style={{ fontSize: 20, fontWeight: 800, color: item.color }}>{item.value}</div>
+                                                <div className="card-metric-value" style={{ fontSize: 20, color: item.color }}>{item.value}</div>
                                             </div>
                                         ))}
                                     </div>

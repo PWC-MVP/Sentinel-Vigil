@@ -52,12 +52,12 @@ export default function Reports({ onNavigate }: { onNavigate: (p: string) => voi
     return (
         <div>
             <div className="page-header">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
                     <div>
                         <div className="page-title">📄 Reports</div>
                         <div className="page-subtitle">Browse and preview generated HTML investigation reports</div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
                         <button className="btn btn-secondary btn-sm" onClick={refresh}>🔄 Refresh</button>
                         <button className="btn btn-primary btn-sm" onClick={() => onNavigate('investigate')}>
                             + New Investigation
@@ -66,9 +66,9 @@ export default function Reports({ onNavigate }: { onNavigate: (p: string) => voi
                 </div>
             </div>
 
-            <div className="page-content" style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, alignItems: 'start' }}>
+            <div className="page-content reports-layout">
                 {/* ── Report list ─────────────────────────────── */}
-                <div className="card" style={{ padding: 0 }}>
+                <div className="card report-list-panel" style={{ padding: 0 }}>
                     <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
                         <div className="card-title" style={{ marginBottom: 0 }}>
                             <span className="card-title-icon">📋</span>
@@ -112,16 +112,17 @@ export default function Reports({ onNavigate }: { onNavigate: (p: string) => voi
                 </div>
 
                 {/* ── Preview pane ─────────────────────────────── */}
-                <div>
+                <div className="report-preview-pane">
                     {selected ? (
                         <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                                <div style={{ fontSize: 13, fontWeight: 600 }}>{selected.name}</div>
+                            <div className="report-preview-header">
+                                <div className="report-preview-filename">{selected.name}</div>
                                 <a
                                     href={`/api/reports/${selected.relative_path}`}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="btn btn-primary btn-sm"
+                                    style={{ flexShrink: 0 }}
                                 >
                                     ↗ Open Full Screen
                                 </a>
@@ -133,9 +134,10 @@ export default function Reports({ onNavigate }: { onNavigate: (p: string) => voi
                             />
                         </div>
                     ) : (
-                        <div className="empty-state" style={{ marginTop: 80 }}>
+                        <div className="empty-state" style={{ marginTop: 60 }}>
                             <div className="empty-state-icon">👈</div>
-                            <div className="empty-state-text">Select a report to preview it</div>
+                            <div className="empty-state-title">No report selected</div>
+                            <div className="empty-state-text">Click any report on the left to preview it here</div>
                         </div>
                     )}
                 </div>

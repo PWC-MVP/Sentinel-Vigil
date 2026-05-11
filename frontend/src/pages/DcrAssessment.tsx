@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import {
     faDatabase, faRobot, faCircleCheck, faCircleXmark,
     faTriangleExclamation, faChevronDown, faChevronUp,
@@ -354,10 +355,12 @@ function AiReportPanel({ days }: { days: number }) {
                         value={model}
                         onChange={e => setModel(e.target.value)}
                         disabled={loading}
-                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                        className="form-select"
+                        style={{ fontSize: 12, padding: '4px 8px' }}
                     >
                         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        <option value="claude-haiku-4-5">Haiku 4.5</option>
+
                     </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
@@ -413,13 +416,13 @@ function AiReportPanel({ days }: { days: number }) {
     );
 }
 
-// ── Stat Card ─────────────────────────────────────────────────────────────────
+// ── Stat Card — uses card-metric design system class ──────────────────────────
 function StatCard({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
     return (
-        <div className="card" style={{ flex: '1 1 160px', minWidth: 140 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>{label}</div>
-            <div style={{ fontSize: 26, fontWeight: 800, color: color || 'var(--text-primary)', lineHeight: 1 }}>{value}</div>
-            {sub && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{sub}</div>}
+        <div className="card-metric" style={{ flex: '1 1 160px', minWidth: 140 }}>
+            <div className="card-metric-label">{label}</div>
+            <div className="card-metric-value" style={{ color: color || 'var(--text-primary)', fontSize: 26 }}>{value}</div>
+            {sub && <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>{sub}</div>}
         </div>
     );
 }
@@ -428,13 +431,8 @@ function StatCard({ label, value, sub, color }: { label: string; value: string |
 function StateBadge({ state }: { state: string }) {
     const ok = state === 'Succeeded';
     return (
-        <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
-            background: ok ? 'rgba(39,174,96,0.12)' : 'rgba(192,57,43,0.12)',
-            color: ok ? '#27AE60' : '#C0392B',
-        }}>
-            <FontAwesomeIcon icon={ok ? faCircleCheck : faCircleXmark} />
+        <span className={`badge ${ok ? 'badge-low' : 'badge-critical'}`} style={{ fontSize: 10 }}>
+            <FontAwesomeIcon icon={ok ? faCircleCheck : faCircleXmark} style={{ marginRight: 4, fontSize: 9 }} />
             {state || 'Unknown'}
         </span>
     );
@@ -443,11 +441,8 @@ function StateBadge({ state }: { state: string }) {
 // ── Mini bar ──────────────────────────────────────────────────────────────────
 function MiniBar({ pct, color }: { pct: number; color?: string }) {
     return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ flex: 1, height: 6, background: 'var(--bg-surface)', borderRadius: 3, overflow: 'hidden' }}>
-                <div style={{ width: `${Math.min(100, pct)}%`, height: '100%', background: color || 'var(--brand)', borderRadius: 3 }} />
-            </div>
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', minWidth: 32 }}>{pct}%</span>
+        <div className="progress-bar-wrap" style={{ marginBottom: 0 }}>
+            <div className="progress-bar-fill orange" style={{ width: `${Math.min(100, pct)}%`, background: color || 'var(--brand)' }} />
         </div>
     );
 }
@@ -511,8 +506,8 @@ export default function DcrAssessment() {
     const dcrErrors = errorsData?.errors || [];
     const diag = errorsData?.diagnostics || [];
     const trend = ingestion?.daily_trend || [];
-    const maxMb = Math.max(...byTable.map(t => t.total_mb), 1);
 
+    // maxMb removed — inline bars now use t.pct directly
     const TABS: { id: TabId; label: string }[] = [
         { id: 'overview', label: 'Overview' },
         { id: 'inventory', label: 'DCR Inventory' },
@@ -523,37 +518,40 @@ export default function DcrAssessment() {
     ];
 
     return (
-        <div style={{ padding: '24px 28px', maxWidth: 1400, margin: '0 auto' }}>
+        <div className="page-content" style={{ maxWidth: 1400, margin: '0 auto' }}>
             {/* ── Header ── */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
-                <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-                        <FontAwesomeIcon icon={faDatabase} style={{ fontSize: 22, color: 'var(--brand)' }} />
-                        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>DCR Assessment & Ingestion Optimisation</h1>
+            <div className="page-header">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                        <div className="page-title">
+                            <FontAwesomeIcon icon={faDatabase} style={{ marginRight: 12, color: 'var(--brand)' }} />
+                            DCR Assessment &amp; Ingestion Optimisation
+                        </div>
+                        <div className="page-subtitle">
+                            Data Collection Rules inventory, ingestion volume, transformation coverage, and cost analysis
+                        </div>
                     </div>
-                    <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-                        Data Collection Rules inventory, ingestion volume, transformation coverage, and cost analysis
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <select
+                            value={days}
+                            onChange={e => setDays(+e.target.value)}
+                            className="form-select"
+                            style={{ fontSize: 12, padding: '5px 10px' }}
+                        >
+                            <option value={0.5}>Last 12 hours</option>
+                            <option value={1}>Last 24 hours</option>
+                            <option value={2}>Last 48 hours</option>
+                            <option value={3}>Last 3 days</option>
+                            <option value={7}>Last 7 days</option>
+                            <option value={14}>Last 14 days</option>
+                            <option value={30}>Last 30 days</option>
+                            <option value={60}>Last 60 days</option>
+                            <option value={90}>Last 90 days</option>
+                        </select>
+                        <button className="btn btn-sm btn-ghost" onClick={fetchData} disabled={loading}>
+                            <FontAwesomeIcon icon={faRefresh} spin={loading} />
+                        </button>
                     </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <select
-                        value={days}
-                        onChange={e => setDays(+e.target.value)}
-                        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 6, padding: '5px 10px', color: 'var(--text-primary)', fontSize: 12 }}
-                    >
-                        <option value={0.5}>Last 12 hours</option>
-                        <option value={1}>Last 24 hours</option>
-                        <option value={2}>Last 48 hours</option>
-                        <option value={3}>Last 3 days</option>
-                        <option value={7}>Last 7 days</option>
-                        <option value={14}>Last 14 days</option>
-                        <option value={30}>Last 30 days</option>
-                        <option value={60}>Last 60 days</option>
-                        <option value={90}>Last 90 days</option>
-                    </select>
-                    <button className="btn btn-sm btn-ghost" onClick={fetchData} disabled={loading}>
-                        <FontAwesomeIcon icon={faRefresh} spin={loading} />
-                    </button>
                 </div>
             </div>
 
@@ -579,18 +577,12 @@ export default function DcrAssessment() {
             )}
 
             {/* ── Tabs ── */}
-            <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
+            <div className="tabs" style={{ marginBottom: 20 }}>
                 {TABS.map(t => (
                     <button
                         key={t.id}
+                        className={`tab ${tab === t.id ? 'active' : ''}`}
                         onClick={() => setTab(t.id)}
-                        style={{
-                            padding: '8px 16px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer',
-                            borderRadius: '6px 6px 0 0', transition: 'all 0.15s',
-                            background: tab === t.id ? 'var(--brand)' : 'transparent',
-                            color: tab === t.id ? '#fff' : 'var(--text-muted)',
-                            borderBottom: tab === t.id ? '2px solid var(--brand)' : '2px solid transparent',
-                        }}
                     >
                         {t.label}
                     </button>
@@ -607,9 +599,23 @@ export default function DcrAssessment() {
             {/* ── Overview Tab ── */}
             {!loading && tab === 'overview' && overview && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {/* Metric cards grid */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12, marginBottom: 4 }}>
+                        {[
+                            { label: 'Total DCRs',           value: overview.dcr_total,           color: 'var(--pwc-orange)' },
+                            { label: 'With Transformations', value: overview.dcr_with_transforms, color: 'var(--info)' },
+                            { label: 'Total Errors',         value: overview.total_errors,        color: 'var(--critical)' },
+                            { label: 'Ingestion (GB)',        value: overview.ingestion_total_gb != null ? Number(overview.ingestion_total_gb).toFixed(1) : '—', color: 'var(--low)' },
+                        ].map(m => (
+                            <div key={m.label} className="card-metric">
+                                <div className="card-metric-value" style={{ color: m.color, fontSize: 26 }}>{m.value ?? '—'}</div>
+                                <div className="card-metric-label">{m.label}</div>
+                            </div>
+                        ))}
+                    </div>
                     <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                         {/* DCR Health */}
-                        <div className="card" style={{ flex: '1 1 320px' }}>
+                        <div className="card-elevated" style={{ flex: '1 1 320px' }}>
                             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>DCR Health Summary</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                                 {[
@@ -618,8 +624,8 @@ export default function DcrAssessment() {
                                     { label: 'Custom Streams', val: overview.dcr_custom_streams, total: overview.dcr_total, color: 'var(--info)' },
                                 ].map(row => (
                                     <div key={row.label}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                                            <span style={{ color: 'var(--text-muted)' }}>{row.label}</span>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                                            <span className="text-muted">{row.label}</span>
                                             <span style={{ fontWeight: 700 }}>{row.val} / {row.total}</span>
                                         </div>
                                         <MiniBar pct={row.total > 0 ? Math.round(100 * row.val / row.total) : 0} color={row.color} />
@@ -635,7 +641,7 @@ export default function DcrAssessment() {
                         </div>
 
                         {/* Ingestion summary */}
-                        <div className="card" style={{ flex: '1 1 320px' }}>
+                        <div className="card-elevated" style={{ flex: '1 1 320px' }}>
                             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Ingestion Summary</div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                 {[
@@ -645,16 +651,16 @@ export default function DcrAssessment() {
                                     { label: 'Est. monthly', val: `${overview.estimated_monthly_gb} GB` },
                                     { label: 'Est. monthly cost', val: `$${(overview.estimated_monthly_gb * 2.76).toFixed(2)}` },
                                 ].map(row => (
-                                    <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
-                                        <span style={{ color: 'var(--text-muted)' }}>{row.label}</span>
-                                        <span style={{ fontWeight: 700 }}>{row.val}</span>
+                                    <div key={row.label} className="kv-row">
+                                        <span className="kv-label">{row.label}</span>
+                                        <span className="kv-value">{row.val}</span>
                                     </div>
                                 ))}
                             </div>
                         </div>
 
                         {/* Errors */}
-                        <div className="card" style={{ flex: '1 1 260px' }}>
+                        <div className="card-elevated" style={{ flex: '1 1 260px' }}>
                             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Pipeline Errors</div>
                             {overview.total_errors === 0 ? (
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#27AE60', fontSize: 13 }}>
@@ -663,45 +669,50 @@ export default function DcrAssessment() {
                                 </div>
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                                        <span style={{ color: 'var(--text-muted)' }}>Total error events</span>
-                                        <span style={{ fontWeight: 700, color: 'var(--critical)' }}>{overview.total_errors}</span>
+                                    <div className="kv-row">
+                                        <span className="kv-label">Total error events</span>
+                                        <span className="kv-value" style={{ color: 'var(--critical)' }}>{overview.total_errors}</span>
                                     </div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
-                                        <span style={{ color: 'var(--text-muted)' }}>Affected DCR rules</span>
-                                        <span style={{ fontWeight: 700, color: 'var(--critical)' }}>{overview.affected_rules}</span>
+                                    <div className="kv-row">
+                                        <span className="kv-label">Affected DCR rules</span>
+                                        <span className="kv-value" style={{ color: 'var(--critical)' }}>{overview.affected_rules}</span>
                                     </div>
                                     <div style={{ marginTop: 4, padding: '7px 10px', background: 'rgba(192,57,43,0.07)', borderRadius: 6, fontSize: 11, color: 'var(--critical)' }}>
                                         <FontAwesomeIcon icon={faExclamationCircle} style={{ marginRight: 6 }} />
-                                        Check the Errors & Drops tab for details
+                                        Check the Errors &amp; Drops tab for details
                                     </div>
                                 </div>
                             )}
                         </div>
                     </div>
 
-                    {/* Ingestion trend */}
-                    {trend.length > 0 && (() => {
-                        const maxTrend = Math.max(...trend.map(t => Number(t.total_mb)), 1);
-                        return (
-                            <div className="card">
-                                <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 14 }}>Daily Ingestion Trend</div>
-                                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 80, background: 'var(--bg-surface)', borderRadius: 6, padding: '4px 4px 0' }}>
-                                    {trend.slice(-30).map((d, i) => {
-                                        const h = Math.max(2, Math.round((Number(d.total_mb) / maxTrend) * 72));
-                                        return (
-                                            <div key={i} title={`${d.date}: ${d.total_mb} MB`}
-                                                style={{ flex: 1, height: h, alignSelf: 'flex-end', background: 'var(--brand)', borderRadius: '2px 2px 0 0', opacity: 0.85, minWidth: 2 }} />
-                                        );
-                                    })}
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
-                                    <span>{trend[0]?.date}</span>
-                                    <span>{trend[trend.length - 1]?.date}</span>
-                                </div>
+                    {/* Ingestion trend — Recharts AreaChart */}
+                    {trend.length > 0 && (
+                        <div className="card">
+                            <div className="chart-title">Daily Ingestion Trend</div>
+                            <div className="chart-container chart-container-md">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={trend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                        <defs>
+                                            <linearGradient id="gradDcrIngestion" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#D04A02" stopOpacity={0.2} />
+                                                <stop offset="95%" stopColor="#D04A02" stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                               tickFormatter={(d: string) => d.slice(5)} />
+                                        <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                               tickFormatter={(v: number) => `${v.toFixed(0)}MB`} />
+                                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(1)} MB`, 'Volume']}
+                                                 contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                        <Area type="monotone" dataKey="total_mb" stroke="#D04A02"
+                                              fill="url(#gradDcrIngestion)" strokeWidth={2} dot={false} />
+                                    </AreaChart>
+                                </ResponsiveContainer>
                             </div>
-                        );
-                    })()}
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -718,34 +729,35 @@ export default function DcrAssessment() {
                         )}
                     </div>
                     {rules.length === 0 ? (
-                        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                            No DCRs found. Ensure the service principal has Reader access to the subscription.
+                        <div className="empty-state" style={{ padding: 32 }}>
+                            <div className="empty-state-icon"><FontAwesomeIcon icon={faDatabase} style={{ opacity: 0.3 }} /></div>
+                            <div className="empty-state-text">No DCRs found. Ensure the service principal has Reader access to the subscription.</div>
                         </div>
                     ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <div className="data-table-wrap">
+                            <table className="data-table">
                                 <thead>
-                                    <tr style={{ background: 'var(--bg-surface)' }}>
+                                    <tr>
                                         {['Name', 'Location', 'State', 'Flows', 'Transforms', 'Custom Streams', 'KQL?', 'Days Since Modified'].map(h => (
-                                            <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>{h}</th>
+                                            <th key={h} style={{ whiteSpace: 'nowrap' }}>{h}</th>
                                         ))}
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {rules.map((r, i) => (
-                                        <tr key={r.id} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 1 ? 'var(--bg-surface)' : undefined }}>
-                                            <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontSize: 11 }}>{r.name}</td>
-                                            <td style={{ padding: '8px 12px', color: 'var(--text-muted)' }}>{r.location}</td>
-                                            <td style={{ padding: '8px 12px' }}><StateBadge state={r.provisioning_state} /></td>
-                                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>{r.data_flows}</td>
-                                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>{r.transformations}</td>
-                                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>{r.custom_streams}</td>
-                                            <td style={{ padding: '8px 12px' }}>
+                                    {rules.map(r => (
+                                        <tr key={r.id}>
+                                            <td className="mono" style={{ fontSize: 11 }}>{r.name}</td>
+                                            <td className="text-muted">{r.location}</td>
+                                            <td><StateBadge state={r.provisioning_state} /></td>
+                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{r.data_flows}</td>
+                                            <td style={{ textAlign: 'center', fontWeight: 700 }}>{r.transformations}</td>
+                                            <td style={{ textAlign: 'center' }}>{r.custom_streams}</td>
+                                            <td>
                                                 {r.has_transformation
-                                                    ? <span style={{ color: '#27AE60', fontWeight: 700, fontSize: 11 }}>Yes</span>
-                                                    : <span style={{ color: 'var(--warning)', fontWeight: 700, fontSize: 11 }}>No</span>}
+                                                    ? <span className="badge badge-low" style={{ fontSize: 10 }}>Yes</span>
+                                                    : <span className="badge badge-medium" style={{ fontSize: 10 }}>No</span>}
                                             </td>
-                                            <td style={{ padding: '8px 12px', color: (r.days_since_modified ?? 0) > 90 ? 'var(--warning)' : 'var(--text-muted)' }}>
+                                            <td style={{ color: (r.days_since_modified ?? 0) > 90 ? 'var(--warning)' : 'var(--text-muted)', fontSize: 12 }}>
                                                 {r.days_since_modified !== null ? `${r.days_since_modified}d` : '—'}
                                             </td>
                                         </tr>
@@ -769,26 +781,56 @@ export default function DcrAssessment() {
                             <StatCard label="Est. Cost/Month" value={`$${(ingSum.estimated_monthly_gb * 2.76).toFixed(2)}`} sub="at $2.76/GB" color="var(--warning)" />
                         </div>
                     )}
+                    {/* Ingestion trend AreaChart */}
+                    {ingestion?.daily_trend && ingestion.daily_trend.length > 0 && (
+                        <div className="card" style={{ marginBottom: 4 }}>
+                            <div className="chart-title">Ingestion Volume Trend</div>
+                            <div className="chart-container chart-container-md">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <AreaChart data={ingestion.daily_trend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                        <defs>
+                                            <linearGradient id="gradDcrIngestionTab" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#D04A02" stopOpacity={0.2} />
+                                                <stop offset="95%" stopColor="#D04A02" stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                               tickFormatter={(d: string) => d.slice(5)} />
+                                        <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                               tickFormatter={(v: number) => `${v.toFixed(0)}MB`} />
+                                        <Tooltip formatter={(v: any) => [`${Number(v).toFixed(1)} MB`, 'Volume']}
+                                                 contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                        <Area type="monotone" dataKey="total_mb" stroke="#D04A02"
+                                              fill="url(#gradDcrIngestionTab)" strokeWidth={2} dot={false} />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    )}
                     <div className="card" style={{ padding: 0 }}>
                         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>
                             Ingestion by Table — top {byTable.length}
                         </div>
                         {byTable.length === 0 ? (
-                            <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>No ingestion data available</div>
+                            <div className="empty-state" style={{ padding: 32 }}>
+                                <div className="empty-state-text">No ingestion data available</div>
+                            </div>
                         ) : (
                             <div>
                                 {byTable.map((t, i) => (
                                     <div key={t.table} style={{ padding: '10px 18px', borderBottom: '1px solid var(--border)', background: i % 2 === 1 ? 'var(--bg-surface)' : undefined }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                                            <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 600 }}>{t.table}</span>
-                                            <div style={{ display: 'flex', gap: 16, fontSize: 11, color: 'var(--text-muted)' }}>
-                                                <span><strong style={{ color: 'var(--text-primary)' }}>{t.total_mb} MB</strong> total</span>
-                                                <span><strong style={{ color: 'var(--text-primary)' }}>{t.daily_avg} MB</strong>/day</span>
-                                                <span style={{ color: 'var(--brand)', fontWeight: 700 }}>{t.pct}%</span>
-                                            </div>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                            <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{t.table}</span>
+                                            <span className="text-muted" style={{ fontSize: 11 }}>
+                                                <strong style={{ color: 'var(--text-primary)' }}>{t.daily_avg} MB</strong>/day
+                                            </span>
                                         </div>
-                                        <div style={{ height: 5, background: 'var(--bg-surface)', borderRadius: 3, overflow: 'hidden' }}>
-                                            <div style={{ width: `${Math.round(100 * t.total_mb / maxMb)}%`, height: '100%', background: 'var(--brand)', borderRadius: 3, opacity: 0.8 }} />
+                                        <div className="inline-bar-wrap">
+                                            <div className="inline-bar">
+                                                <div className="inline-bar-fill" style={{ width: `${Math.min(100, t.pct || 0)}%` }} />
+                                            </div>
+                                            <div className="inline-bar-label">{(t.total_mb || 0).toFixed(1)} MB · {t.pct}%</div>
                                         </div>
                                     </div>
                                 ))}
@@ -808,37 +850,57 @@ export default function DcrAssessment() {
                         </div>
                     )}
 
+                    {/* Error timeline BarChart */}
+                    {errorsData?.daily_trend && errorsData.daily_trend.length > 0 && (
+                        <div className="card" style={{ marginBottom: 4 }}>
+                            <div className="chart-title">Daily Error Count</div>
+                            <div className="chart-container chart-container-sm">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={errorsData.daily_trend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                        <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                               tickFormatter={(d: string) => d.slice(5)} />
+                                        <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                        <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                        <Bar dataKey="error_count" name="Errors" fill="#C0392B" radius={[3, 3, 0, 0]} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    )}
                     {/* DCRLogErrors */}
                     <div className="card" style={{ padding: 0 }}>
                         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>
                             DCR Pipeline Errors (DCRLogErrors)
                         </div>
                         {dcrErrors.length === 0 ? (
-                            <div style={{ padding: 24, textAlign: 'center', color: '#27AE60', fontSize: 13 }}>
-                                <FontAwesomeIcon icon={faCheckCircle} style={{ marginRight: 8 }} />
-                                No pipeline errors detected
+                            <div className="empty-state" style={{ padding: 24 }}>
+                                <div className="empty-state-icon"><FontAwesomeIcon icon={faCheckCircle} style={{ color: '#27AE60', opacity: 0.7 }} /></div>
+                                <div className="empty-state-text">No pipeline errors detected</div>
                             </div>
                         ) : (
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <div className="data-table-wrap">
+                                <table className="data-table">
                                     <thead>
-                                        <tr style={{ background: 'var(--bg-surface)' }}>
+                                        <tr>
                                             {['Rule Name', 'Stream', 'Error Code', 'Message', 'Count', 'Last Seen'].map(h => (
-                                                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                                                <th key={h}>{h}</th>
                                             ))}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {dcrErrors.map((e, i) => (
-                                            <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 1 ? 'var(--bg-surface)' : undefined }}>
-                                                <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontSize: 11 }}>{e.rule_name}</td>
-                                                <td style={{ padding: '7px 12px', color: 'var(--text-muted)' }}>{e.stream}</td>
-                                                <td style={{ padding: '7px 12px' }}>
-                                                    {e.error_code && <span style={{ background: 'rgba(192,57,43,0.1)', color: 'var(--critical)', padding: '1px 6px', borderRadius: 4, fontSize: 10, fontFamily: 'monospace' }}>{e.error_code}</span>}
+                                            <tr key={i}>
+                                                <td className="mono" style={{ fontSize: 11 }}>{e.rule_name}</td>
+                                                <td className="text-muted">{e.stream}</td>
+                                                <td>
+                                                    {e.error_code && (
+                                                        <span className="badge badge-critical" style={{ fontSize: 10 }}>{e.error_code}</span>
+                                                    )}
                                                 </td>
-                                                <td style={{ padding: '7px 12px', maxWidth: 280, color: 'var(--text-muted)' }}>{e.message}</td>
-                                                <td style={{ padding: '7px 12px', fontWeight: 700, color: 'var(--critical)' }}>{e.count}</td>
-                                                <td style={{ padding: '7px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{e.last_seen ? e.last_seen.slice(0, 10) : '—'}</td>
+                                                <td className="text-muted" style={{ maxWidth: 280 }}>{e.message}</td>
+                                                <td style={{ fontWeight: 700, color: 'var(--critical)' }}>{e.count}</td>
+                                                <td className="text-muted" style={{ fontSize: 11 }}>{e.last_seen ? e.last_seen.slice(0, 10) : '—'}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -853,24 +915,26 @@ export default function DcrAssessment() {
                             <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 700, fontSize: 13 }}>
                                 AzureDiagnostics — DCR Events
                             </div>
-                            <div style={{ overflowX: 'auto' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                            <div className="data-table-wrap">
+                                <table className="data-table">
                                     <thead>
-                                        <tr style={{ background: 'var(--bg-surface)' }}>
+                                        <tr>
                                             {['Operation', 'Resource', 'Result', 'Count'].map(h => (
-                                                <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                                                <th key={h}>{h}</th>
                                             ))}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {diag.map((d, i) => (
-                                            <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 1 ? 'var(--bg-surface)' : undefined }}>
-                                                <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontSize: 11 }}>{d.operation.split('/').pop()}</td>
-                                                <td style={{ padding: '7px 12px', color: 'var(--text-muted)' }}>{d.resource}</td>
-                                                <td style={{ padding: '7px 12px' }}>
-                                                    <span style={{ color: d.result === 'Success' ? '#27AE60' : 'var(--critical)', fontWeight: 700, fontSize: 11 }}>{d.result}</span>
+                                            <tr key={i}>
+                                                <td className="mono" style={{ fontSize: 11 }}>{d.operation.split('/').pop()}</td>
+                                                <td className="text-muted">{d.resource}</td>
+                                                <td>
+                                                    <span className={`badge ${d.result === 'Success' ? 'badge-low' : 'badge-critical'}`} style={{ fontSize: 10 }}>
+                                                        {d.result}
+                                                    </span>
                                                 </td>
-                                                <td style={{ padding: '7px 12px', fontWeight: 700 }}>{d.count}</td>
+                                                <td style={{ fontWeight: 700 }}>{d.count}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -888,30 +952,32 @@ export default function DcrAssessment() {
                         DCR Governance Activity — last {days} days
                     </div>
                     {activity.length === 0 ? (
-                        <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                            No DCR activity events found in AzureActivity for this period
+                        <div className="empty-state" style={{ padding: 32 }}>
+                            <div className="empty-state-text">No DCR activity events found in AzureActivity for this period</div>
                         </div>
                     ) : (
-                        <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <div className="data-table-wrap">
+                            <table className="data-table">
                                 <thead>
-                                    <tr style={{ background: 'var(--bg-surface)' }}>
+                                    <tr>
                                         {['Operation', 'Resource', 'Status', 'Caller', 'Count', 'Last Seen'].map(h => (
-                                            <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 700, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid var(--border)' }}>{h}</th>
+                                            <th key={h}>{h}</th>
                                         ))}
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {activity.map((a, i) => (
-                                        <tr key={i} style={{ borderBottom: '1px solid var(--border)', background: i % 2 === 1 ? 'var(--bg-surface)' : undefined }}>
-                                            <td style={{ padding: '7px 12px', fontFamily: 'monospace', fontSize: 11 }}>{a.operation.split('/').pop()}</td>
-                                            <td style={{ padding: '7px 12px', color: 'var(--text-muted)' }}>{a.resource}</td>
-                                            <td style={{ padding: '7px 12px' }}>
-                                                <span style={{ color: a.status === 'Success' ? '#27AE60' : 'var(--critical)', fontWeight: 700, fontSize: 11 }}>{a.status}</span>
+                                        <tr key={i}>
+                                            <td className="mono" style={{ fontSize: 11 }}>{a.operation.split('/').pop()}</td>
+                                            <td className="text-muted">{a.resource}</td>
+                                            <td>
+                                                <span className={`badge ${a.status === 'Success' ? 'badge-low' : 'badge-critical'}`} style={{ fontSize: 10 }}>
+                                                    {a.status}
+                                                </span>
                                             </td>
-                                            <td style={{ padding: '7px 12px', color: 'var(--text-muted)' }}>{a.caller}</td>
-                                            <td style={{ padding: '7px 12px', fontWeight: 700 }}>{a.count}</td>
-                                            <td style={{ padding: '7px 12px', color: 'var(--text-muted)', fontSize: 11 }}>{a.last_seen ? a.last_seen.slice(0, 10) : '—'}</td>
+                                            <td className="text-muted">{a.caller}</td>
+                                            <td style={{ fontWeight: 700 }}>{a.count}</td>
+                                            <td className="text-muted" style={{ fontSize: 11 }}>{a.last_seen ? a.last_seen.slice(0, 10) : '—'}</td>
                                         </tr>
                                     ))}
                                 </tbody>

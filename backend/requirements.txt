@@ -35,3 +35,6 @@ python-multipart>=0.0.9
 
 # PDF parsing (required by chat.py /upload endpoint)
 pypdf>=4.0.0
+
+# RSS feed parsing (required by threat_feed.py)
+feedparser>=6.0.0

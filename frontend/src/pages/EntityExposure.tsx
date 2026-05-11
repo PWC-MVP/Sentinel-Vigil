@@ -19,17 +19,6 @@ function riskBadge(level: string) {
     if (l === 'low') return 'badge-low';
     return 'badge-muted';
 }
-function entityTypeIcon(type: string) {
-    switch (type) {
-        case 'account': return '👤';
-        case 'host': return '🖥️';
-        case 'ip': return '🌐';
-        case 'url': return '🔗';
-        case 'file-hash': return '#️⃣';
-        default: return '•';
-    }
-}
-
 export default function EntityExposure() {
     const [tab, setTab] = useState<'riskyusers' | 'behavior' | 'entities' | 'hosts'>('riskyusers');
     const [days, setDays] = useState(7);
@@ -119,11 +108,11 @@ export default function EntityExposure() {
                         <div className="page-subtitle">Risky identities, behavioral anomalies, and high-alert entities from Sentinel telemetry</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button className="btn btn-sm btn-ghost" onClick={() => handleExport('html')} disabled={isExporting || loading}>
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleExport('html')} disabled={isExporting || loading}>
                             <FontAwesomeIcon icon={faFileCode} style={{ color: 'var(--info)' }} /> HTML
                         </button>
-                        <button className="btn btn-sm btn-ghost" onClick={() => handleExport('pdf')} disabled={isExporting || loading}>
-                            <FontAwesomeIcon icon={faFilePdf} style={{ color: 'var(--critical)' }} /> PDF
+                        <button className="btn btn-primary btn-sm" onClick={() => handleExport('pdf')} disabled={isExporting || loading}>
+                            <FontAwesomeIcon icon={faFilePdf} /> PDF
                         </button>
                         <button className="btn btn-sm btn-ghost" onClick={fetchData} disabled={loading}>
                             <FontAwesomeIcon icon={faRefresh} spin={loading} /> Refresh
@@ -145,27 +134,25 @@ export default function EntityExposure() {
                 {loading ? <Skeleton /> : (
                     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                         {/* KPIs */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
-                            <div className="stat-tile" style={{ borderTop: '3px solid var(--critical)', cursor: 'pointer' }} onClick={() => setTab('riskyusers')}>
-                                <div className="stat-tile-label">Risky Users</div>
-                                <div className="stat-tile-value" style={{ color: 'var(--critical)' }}>{overview?.risky_users ?? 0}</div>
-                                <div className="text-xs text-muted">High / medium risk identities</div>
-                            </div>
-                            <div className="stat-tile" style={{ borderTop: '3px solid var(--high)', cursor: 'pointer' }} onClick={() => setTab('behavior')}>
-                                <div className="stat-tile-label">Behavioral Anomalies</div>
-                                <div className="stat-tile-value" style={{ color: 'var(--high)' }}>{overview?.anomalous_users ?? 0}</div>
-                                <div className="text-xs text-muted">Unique users w/ anomalies</div>
-                            </div>
-                            <div className="stat-tile" style={{ borderTop: '3px solid var(--brand)', cursor: 'pointer' }} onClick={() => setTab('entities')}>
-                                <div className="stat-tile-label">Alert Entities</div>
-                                <div className="stat-tile-value" style={{ color: 'var(--brand)' }}>{overview?.alert_entities ?? 0}</div>
-                                <div className="text-xs text-muted">Total entity alerts</div>
-                            </div>
-                            <div className="stat-tile" style={{ borderTop: '3px solid var(--info)', cursor: 'pointer' }} onClick={() => setTab('hosts')}>
-                                <div className="stat-tile-label">Risky Hosts</div>
-                                <div className="stat-tile-value" style={{ color: 'var(--info)' }}>{overview?.risky_hosts ?? 0}</div>
-                                <div className="text-xs text-muted">Hosts w/ suspicious events</div>
-                            </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 16, marginBottom: 4 }}>
+                            {[
+                                { label: 'Risky Users',      value: overview?.risky_users,     color: '#C0392B', varColor: 'var(--critical)', tab: 'riskyusers' as const },
+                                { label: 'Anomalous Users',  value: overview?.anomalous_users,  color: '#E67E22', varColor: 'var(--high)',     tab: 'behavior'   as const },
+                                { label: 'Risky Hosts',      value: overview?.risky_hosts,      color: '#D4AC0D', varColor: 'var(--medium)',   tab: 'hosts'      as const },
+                                { label: 'Alert Entities',   value: overview?.alert_entities,   color: '#2980B9', varColor: 'var(--info)',     tab: 'entities'   as const },
+                            ].map(m => (
+                                <div
+                                    key={m.label}
+                                    className="card-metric"
+                                    style={{ '--card-top-color': m.color, cursor: 'pointer' } as React.CSSProperties}
+                                    onClick={() => setTab(m.tab)}
+                                >
+                                    <div className="card-metric-value" style={{ color: m.varColor, fontSize: 28 }}>
+                                        {m.value ?? '—'}
+                                    </div>
+                                    <div className="card-metric-label">{m.label}</div>
+                                </div>
+                            ))}
                         </div>
 
                         {/* Tabs */}
@@ -184,7 +171,7 @@ export default function EntityExposure() {
 
                         {/* Risky Users */}
                         {tab === 'riskyusers' && (
-                            <div className="card" style={{ padding: 0 }}>
+                            <div className="card card-elevated" style={{ padding: 0 }}>
                                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 10, alignItems: 'center' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
                                         <FontAwesomeIcon icon={faUser} className="card-title-icon" style={{ color: 'var(--critical)' }} />
@@ -204,9 +191,9 @@ export default function EntityExposure() {
                                         <table className="data-table">
                                             <thead>
                                                 <tr>
+                                                    <th style={{ width: 36 }}></th>
                                                     <th>User Principal Name</th>
                                                     <th style={{ width: 100 }}>Risk Level</th>
-                                                    <th style={{ width: 90 }}>Admin</th>
                                                     <th>Department</th>
                                                     <th>Job Title</th>
                                                 </tr>
@@ -214,12 +201,21 @@ export default function EntityExposure() {
                                             <tbody>
                                                 {riskyUsers.users.map((u, i) => (
                                                     <tr key={i}>
-                                                        <td style={{ fontWeight: 600, fontSize: 12 }}>{u.upn}</td>
-                                                        <td>
-                                                            <span className={`badge ${riskBadge(u.risk_level)}`}>{u.risk_level}</span>
+                                                        <td style={{ width: 36, paddingRight: 0 }}>
+                                                            <div className="avatar avatar-sm avatar-orange">
+                                                                {(u.upn || '??').slice(0, 2).toUpperCase()}
+                                                            </div>
                                                         </td>
                                                         <td>
-                                                            {u.is_admin && <span className="badge badge-critical" style={{ fontSize: 10 }}>Admin</span>}
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 12 }}>
+                                                                {u.upn}
+                                                                {u.is_admin && (
+                                                                    <span style={{ color: 'var(--pwc-orange)', fontSize: 11 }} title="Admin">🛡</span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td>
+                                                            <span className={`badge ${riskBadge(u.risk_level)}`}>{u.risk_level || 'Unknown'}</span>
                                                         </td>
                                                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{u.department || '—'}</td>
                                                         <td style={{ fontSize: 12, color: 'var(--text-muted)' }}>{u.job_title || '—'}</td>
@@ -234,7 +230,7 @@ export default function EntityExposure() {
 
                         {/* Behavioral Anomalies */}
                         {tab === 'behavior' && (
-                            <div className="card" style={{ padding: 0 }}>
+                            <div className="card card-elevated" style={{ padding: 0 }}>
                                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
                                         <FontAwesomeIcon icon={faBrain} className="card-title-icon" style={{ color: 'var(--high)' }} />
@@ -274,7 +270,7 @@ export default function EntityExposure() {
                                                         <td>
                                                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                                                 {(Array.isArray(a.activity_types) ? a.activity_types : []).slice(0, 4).map((t, j) => (
-                                                                    <span key={j} className="badge badge-muted" style={{ fontSize: 10 }}>{t}</span>
+                                                                    <span key={j} className="chip" style={{ fontSize: 10, padding: '2px 8px', cursor: 'default' }}>{t}</span>
                                                                 ))}
                                                             </div>
                                                         </td>
@@ -289,7 +285,7 @@ export default function EntityExposure() {
 
                         {/* Alert Entities */}
                         {tab === 'entities' && (
-                            <div className="card" style={{ padding: 0 }}>
+                            <div className="card card-elevated" style={{ padding: 0 }}>
                                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
                                         <FontAwesomeIcon icon={faCircleNodes} className="card-title-icon" />
@@ -312,7 +308,7 @@ export default function EntityExposure() {
                                         <table className="data-table">
                                             <thead>
                                                 <tr>
-                                                    <th style={{ width: 50 }}>Type</th>
+                                                    <th style={{ width: 120 }}>Type</th>
                                                     <th>Entity Name</th>
                                                     <th style={{ width: 90 }}>Alerts</th>
                                                     <th>Volume</th>
@@ -323,12 +319,23 @@ export default function EntityExposure() {
                                             <tbody>
                                                 {filteredEntities.map((e, i) => (
                                                     <tr key={i}>
-                                                        <td style={{ textAlign: 'center', fontSize: 14 }}>{entityTypeIcon(e.type)}</td>
+                                                        <td>
+                                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                                                                    {e.type?.toLowerCase().includes('account') || e.type?.toLowerCase().includes('user') ? '👤'
+                                                                     : e.type?.toLowerCase().includes('host') || e.type?.toLowerCase().includes('device') ? '🖥'
+                                                                     : e.type?.toLowerCase().includes('ip') ? '🌐'
+                                                                     : '⚠️'}
+                                                                </span>
+                                                                <span style={{ fontSize: 11, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>{e.type}</span>
+                                                            </div>
+                                                        </td>
                                                         <td style={{ fontWeight: 600, fontSize: 12, fontFamily: 'monospace' }}>{e.name}</td>
                                                         <td style={{ fontWeight: 700, color: 'var(--brand)' }}>{e.alert_count.toLocaleString()}</td>
                                                         <td style={{ width: 150 }}>
-                                                            <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4 }}>
-                                                                <div style={{ width: `${(e.alert_count / maxEntityAlerts) * 100}%`, height: '100%', background: 'var(--brand)', borderRadius: 4 }} />
+                                                            <div className="progress-bar-wrap">
+                                                                <div className="progress-bar-fill orange"
+                                                                     style={{ width: `${(e.alert_count / maxEntityAlerts) * 100}%` }} />
                                                             </div>
                                                         </td>
                                                         <td>
@@ -352,7 +359,7 @@ export default function EntityExposure() {
 
                         {/* Risky Hosts */}
                         {tab === 'hosts' && (
-                            <div className="card" style={{ padding: 0 }}>
+                            <div className="card card-elevated" style={{ padding: 0 }}>
                                 <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
                                     <div className="card-title" style={{ margin: 0 }}>
                                         <FontAwesomeIcon icon={faServer} className="card-title-icon" style={{ color: 'var(--info)' }} />
@@ -393,8 +400,9 @@ export default function EntityExposure() {
                                                             </div>
                                                         </td>
                                                         <td style={{ width: 150 }}>
-                                                            <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4 }}>
-                                                                <div style={{ width: `${(h.event_count / maxHostEvents) * 100}%`, height: '100%', background: 'var(--info)', borderRadius: 4 }} />
+                                                            <div className="progress-bar-wrap">
+                                                                <div className="progress-bar-fill orange"
+                                                                     style={{ width: `${(h.event_count / maxHostEvents) * 100}%` }} />
                                                             </div>
                                                         </td>
                                                         <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>

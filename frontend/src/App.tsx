@@ -24,10 +24,11 @@ import Backup from './pages/Backup';
 import Restore from './pages/Restore';
 import Snapshots from './pages/Snapshots';
 import DcrAssessment from './pages/DcrAssessment';
+import ThreatFeed from './pages/ThreatFeed';
 
 type Page = 'chat' | 'dashboard' | 'investigate' | 'reports' | 'enrich' | 'kql' | 'settings' | 'mitre' | 'geomap' | 'analytics'
     | 'sentinel-health' | 'automation' | 'rules' | 'incidents' | 'entities' | 'hunting' | 'workbooks'
-    | 'backup' | 'restore' | 'snapshots' | 'dcr';
+    | 'backup' | 'restore' | 'snapshots' | 'dcr' | 'threat-feed';
 
 function App() {
   const [page, setPage] = useState<Page>('chat');
@@ -80,7 +81,8 @@ function App() {
       case 'backup':    return <Backup />;
       case 'restore':   return <Restore />;
       case 'snapshots': return <Snapshots />;
-      case 'dcr':       return <DcrAssessment />;
+      case 'dcr':         return <DcrAssessment />;
+      case 'threat-feed': return <ThreatFeed />;
       default: return <Chat />;
     }
   };

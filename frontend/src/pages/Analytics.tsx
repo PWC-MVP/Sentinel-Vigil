@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { http as axios } from '../api/client';
+import { PieChart, Pie, Cell, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faChartLine,
@@ -118,7 +119,7 @@ export default function Analytics() {
                             </tr>
                         `).join('')}
                     </table>
-                    
+
                     <div style="margin-top: 50px; font-size: 11px; color: #7D7D7D; text-align: center; border-top: 1px solid #E5E5E5; padding-top: 20px;">
                         Confidential Security Report · For internal review only
                     </div>
@@ -211,7 +212,7 @@ export default function Analytics() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                         <div style={{ display: 'flex', gap: 8 }}>
                             <button
-                                className="btn btn-sm btn-ghost"
+                                className="btn btn-secondary btn-sm"
                                 onClick={() => handleExport('html')}
                                 disabled={isExporting || loading}
                                 title="Export HTML"
@@ -220,12 +221,12 @@ export default function Analytics() {
                                 HTML
                             </button>
                             <button
-                                className="btn btn-sm btn-ghost"
+                                className="btn btn-primary btn-sm"
                                 onClick={() => handleExport('pdf')}
                                 disabled={isExporting || loading}
                                 title="Export PDF"
                             >
-                                <FontAwesomeIcon icon={faFilePdf} style={{ color: 'var(--critical)' }} />
+                                <FontAwesomeIcon icon={faFilePdf} />
                                 PDF
                             </button>
                         </div>
@@ -254,12 +255,12 @@ export default function Analytics() {
                             </select>
                         </div>
 
-                        <div className="tab-group" style={{ display: 'flex', gap: 4, background: 'var(--bg-input)', padding: 4, borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                        <div className="tabs" style={{ display: 'flex', gap: 4, background: 'var(--bg-input)', padding: 4, borderRadius: 8, border: '1px solid var(--border-color)', marginBottom: 0 }}>
                             {(['overview', 'mcp', 'ingestion'] as const).map(t => (
                                 <button
                                     key={t}
                                     onClick={() => setTab(t)}
-                                    className={`btn btn-sm ${tab === t ? 'btn-primary' : 'btn-ghost'}`}
+                                    className={`tab ${tab === t ? 'active' : ''}`}
                                     style={{ borderRadius: 6, textTransform: 'capitalize', minWidth: 90 }}
                                 >
                                     {t}
@@ -275,14 +276,74 @@ export default function Analytics() {
                     <div className="fade-in">
                         {tab === 'overview' && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                                {/* Severity donut */}
+                                {incidents && (
+                                    <div className="card" style={{ marginBottom: 4 }}>
+                                        <div className="chart-title">Incident Severity Distribution</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
+                                            <div style={{ position: 'relative', width: 180, height: 180, flexShrink: 0 }}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <PieChart>
+                                                        <Pie
+                                                            data={[
+                                                                { name: 'High',          value: incidents.severity?.high || 0 },
+                                                                { name: 'Medium',        value: incidents.severity?.medium || 0 },
+                                                                { name: 'Low',           value: incidents.severity?.low || 0 },
+                                                                { name: 'Informational', value: incidents.severity?.informational || 0 },
+                                                            ]}
+                                                            cx="50%" cy="50%"
+                                                            innerRadius={55} outerRadius={80}
+                                                            dataKey="value" paddingAngle={3}
+                                                            startAngle={90} endAngle={-270}
+                                                        >
+                                                            <Cell fill="#E67E22" />
+                                                            <Cell fill="#D4AC0D" />
+                                                            <Cell fill="#27AE60" />
+                                                            <Cell fill="#2980B9" />
+                                                        </Pie>
+                                                        <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    </PieChart>
+                                                </ResponsiveContainer>
+                                                <div style={{
+                                                    position: 'absolute', inset: 0,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    flexDirection: 'column', pointerEvents: 'none',
+                                                }}>
+                                                    <div className="card-metric-value" style={{ fontSize: 22 }}>
+                                                        {(incidents.severity?.high || 0) + (incidents.severity?.medium || 0) +
+                                                         (incidents.severity?.low || 0) + (incidents.severity?.informational || 0)}
+                                                    </div>
+                                                    <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Total</div>
+                                                </div>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                {[
+                                                    { label: 'High',          value: incidents.severity?.high || 0,          color: '#E67E22' },
+                                                    { label: 'Medium',        value: incidents.severity?.medium || 0,        color: '#D4AC0D' },
+                                                    { label: 'Low',           value: incidents.severity?.low || 0,           color: '#27AE60' },
+                                                    { label: 'Informational', value: incidents.severity?.informational || 0, color: '#2980B9' },
+                                                ].map(s => (
+                                                    <div key={s.label} className="kv-row">
+                                                        <div className="kv-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                            <div style={{ width: 8, height: 8, borderRadius: '50%', background: s.color, flexShrink: 0 }} />
+                                                            {s.label}
+                                                        </div>
+                                                        <div className="kv-value">{s.value}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
                                     <div className="stat-tile">
                                         <div className="stat-tile-label">Security Posture Score</div>
                                         <div className="stat-tile-value" style={{ color: (posture?.score ?? 0) > 80 ? 'var(--low)' : 'var(--high)' }}>
                                             {posture?.score}/{posture?.max_score}
                                         </div>
-                                        <div style={{ height: 4, background: '#eee', marginTop: 10, borderRadius: 2 }}>
-                                            <div style={{ width: `${(posture?.score ?? 0)}%`, height: '100%', background: 'currentColor', borderRadius: 2 }} />
+                                        <div className="progress-bar-wrap" style={{ marginTop: 10 }}>
+                                            <div className={`progress-bar-fill ${(posture?.score ?? 0) > 80 ? 'green' : 'orange'}`}
+                                                 style={{ width: `${(posture?.score ?? 0)}%` }} />
                                         </div>
                                     </div>
                                     <div className="stat-tile">
@@ -316,7 +377,7 @@ export default function Analytics() {
                                                 <SeverityBar label="Info" count={incidents?.severity.informational ?? 0} color="var(--info)" max={incidents?.status.closed || 100} />
                                             </div>
                                             <div style={{ textAlign: 'center', minWidth: 140 }}>
-                                                <div style={{ fontSize: 36, fontWeight: 800, color: 'var(--text-primary)' }}>{incidents?.status.closed}</div>
+                                                <div className="card-metric-value" style={{ fontSize: 36 }}>{incidents?.status.closed}</div>
                                                 <div className="text-xs text-muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>Closed ({days}d)</div>
                                             </div>
                                         </div>
@@ -332,7 +393,7 @@ export default function Analytics() {
                                                 <div key={i} style={{ display: 'flex', gap: 12, fontSize: 12, padding: '10px 12px', background: 'var(--pwc-orange-light)', borderRadius: 8, border: '1px solid var(--pwc-orange-border)', alignItems: 'center' }}>
                                                     <div style={{ background: 'var(--brand)', color: 'white', fontWeight: 800, padding: '2px 8px', borderRadius: 10, fontSize: 10 }}>{item.impact}</div>
                                                     <div style={{ flex: 1, color: 'var(--text-primary)', fontWeight: 500 }}>{item.task}</div>
-                                                    <div style={{ fontSize: 10, textTransform: 'uppercase', color: item.severity === 'High' ? 'var(--critical)' : 'var(--high)', fontWeight: 700 }}>{item.severity}</div>
+                                                    <span className={`badge ${item.severity === 'High' ? 'badge-critical' : 'badge-high'}`} style={{ fontSize: 10 }}>{item.severity}</span>
                                                 </div>
                                             ))}
                                         </div>
@@ -342,7 +403,51 @@ export default function Analytics() {
                         )}
 
                         {tab === 'mcp' && (
-                            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 20 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                {/* MCP Tool Usage BarChart */}
+                                {mcp?.tools && mcp.tools.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">MCP Tool Usage</div>
+                                        <div className="chart-container chart-container-md">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={mcp.tools.slice(0, 12)} layout="vertical"
+                                                          margin={{ top: 0, right: 20, left: 100, bottom: 0 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F0F0F0" />
+                                                    <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                    <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={100} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Bar dataKey="calls" name="Calls" fill="#D04A02" radius={[0, 4, 4, 0]} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                                {/* Hourly usage AreaChart */}
+                                {mcp?.hourly_usage && mcp.hourly_usage.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Hourly Usage Pattern</div>
+                                        <div className="chart-container chart-container-sm">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <AreaChart
+                                                    data={mcp.hourly_usage.map((v: number, i: number) => ({ hour: `${i}h`, calls: v }))}
+                                                    margin={{ top: 4, right: 16, left: -10, bottom: 0 }}
+                                                >
+                                                    <defs>
+                                                        <linearGradient id="gradHourly" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#D04A02" stopOpacity={0.2} />
+                                                            <stop offset="95%" stopColor="#D04A02" stopOpacity={0} />
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'var(--text-muted)' }} interval={3} />
+                                                    <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Area type="monotone" dataKey="calls" stroke="#D04A02" fill="url(#gradHourly)" strokeWidth={2} dot={false} />
+                                                </AreaChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 300px', gap: 20 }}>
                                 <div className="card">
                                     <div className="card-title">
                                         <FontAwesomeIcon icon={faToolbox} className="card-title-icon" style={{ color: 'var(--brand)' }} />
@@ -369,8 +474,9 @@ export default function Analytics() {
                                                             </span>
                                                         </td>
                                                         <td style={{ width: 120 }}>
-                                                            <div style={{ height: 4, background: '#eee', borderRadius: 2 }}>
-                                                                <div style={{ width: `${t.success_rate * 100}%`, height: '100%', background: 'var(--brand)', borderRadius: 2 }} />
+                                                            <div className="progress-bar-wrap">
+                                                                <div className="progress-bar-fill orange"
+                                                                     style={{ width: `${t.success_rate * 100}%` }} />
                                                             </div>
                                                         </td>
                                                     </tr>
@@ -392,6 +498,7 @@ export default function Analytics() {
                                     </div>
                                     <div className="text-xs text-muted" style={{ textAlign: 'center' }}>Relative Frequency ({days}d)</div>
                                 </div>
+                            </div>
                             </div>
                         )}
 
@@ -418,15 +525,20 @@ export default function Analytics() {
                                                     return (
                                                         <tr key={t.table}>
                                                             <td className="mono" style={{ fontWeight: 600 }}>{t.table}</td>
-                                                            <td style={{ fontWeight: 700 }}>{t.size_gb.toFixed(2)} GB</td>
+                                                            <td>
+                                                                <div className="inline-bar-wrap">
+                                                                    <div className="inline-bar">
+                                                                        <div className="inline-bar-fill"
+                                                                             style={{ width: `${Math.min(100, (t.size_gb / (ingestion?.total_7d_gb || 1)) * 100)}%` }} />
+                                                                    </div>
+                                                                    <div className="inline-bar-label">{t.size_gb.toFixed(2)} GB</div>
+                                                                </div>
+                                                            </td>
                                                             <td style={{ width: 220 }}>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                                    <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
-                                                                        <div style={{
-                                                                            width: `${percentage}%`,
-                                                                            height: '100%',
-                                                                            background: 'linear-gradient(90deg, var(--info) 0%, #4facfe 100%)'
-                                                                        }} />
+                                                                    <div className="progress-bar-wrap" style={{ flex: 1 }}>
+                                                                        <div className="progress-bar-fill orange"
+                                                                             style={{ width: `${percentage}%` }} />
                                                                     </div>
                                                                     <span style={{ minWidth: 45, fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
                                                                         {percentage}%

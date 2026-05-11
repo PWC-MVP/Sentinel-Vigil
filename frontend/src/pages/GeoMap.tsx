@@ -182,17 +182,22 @@ export default function GeoMap() {
             </div>
 
             {/* Controls */}
-            <div style={{ padding: '12px 28px', background: 'var(--pwc-white)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+            <div className="card" style={{ margin: '0 16px 0', borderRadius: 0, borderLeft: 'none', borderRight: 'none', borderTop: 'none', flexShrink: 0, padding: '12px 28px' }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                        {QUERY_TYPES.map(qt => (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {[
+                            { value: 'failed', label: 'Failed Sign-ins' },
+                            { value: 'all',    label: 'All Sign-ins' },
+                            { value: 'risky',  label: 'Risky Sign-ins' },
+                            { value: 'mfa',    label: 'MFA Challenged' },
+                        ].map(q => (
                             <button
-                                key={qt.id}
-                                onClick={() => setQueryType(qt.id)}
-                                className={`btn btn-sm ${queryType === qt.id ? 'btn-primary' : 'btn-secondary'}`}
-                                title={qt.desc}
+                                key={q.value}
+                                className={`chip ${queryType === q.value ? 'active' : ''}`}
+                                onClick={() => setQueryType(q.value)}
+                                title={QUERY_TYPES.find(qt => qt.id === q.value)?.desc}
                             >
-                                {qt.label}
+                                {q.label}
                             </button>
                         ))}
                     </div>
@@ -213,13 +218,22 @@ export default function GeoMap() {
                 </div>
             </div>
 
-            {/* Stat bar */}
+            {/* Stat bar — metric cards */}
             {data && points.length > 0 && (
-                <div style={{ padding: '8px 28px', background: 'var(--pwc-pale-grey)', borderBottom: '1px solid var(--border)', display: 'flex', gap: 24, fontSize: 12, flexShrink: 0 }}>
-                    <span>📍 <strong>{data.ips_geocoded}</strong> geocoded IPs</span>
-                    <span>🌍 <strong>{data.countries}</strong> countries</span>
-                    {threats.length > 0 && <span style={{ color: 'var(--critical)' }}>⚠️ <strong>{threats.length}</strong> threat intel matches</span>}
-                    <span className="text-muted">Total: {data.total_ips_queried} IPs queried</span>
+                <div style={{ padding: '10px 28px', background: 'var(--bg-base)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+                    <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))' }}>
+                        {[
+                            { label: 'IPs Queried',  value: data.total_ips_queried, color: 'var(--pwc-orange)' },
+                            { label: 'IPs Geocoded', value: data.ips_geocoded,      color: 'var(--info)' },
+                            { label: 'Countries',    value: data.countries,         color: 'var(--low)' },
+                            ...(threats.length > 0 ? [{ label: 'Threats Detected', value: threats.length, color: 'var(--critical)' }] : []),
+                        ].map(m => (
+                            <div key={m.label} className="stat-tile" style={{ padding: '10px 14px' }}>
+                                <div className="stat-tile-value" style={{ color: m.color, fontSize: 22 }}>{m.value ?? '—'}</div>
+                                <div className="stat-tile-label">{m.label}</div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
 
@@ -235,9 +249,11 @@ export default function GeoMap() {
                             position: 'absolute', inset: 0, background: 'rgba(247,247,247,0.92)',
                             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999,
                         }}>
-                            <div style={{ fontSize: 36, marginBottom: 10 }}>🌐</div>
-                            <div style={{ fontSize: 14, color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 6 }}>No geo data</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)', textAlign: 'center', maxWidth: 320 }}>{data.message || 'The query returned no results. Try a different time range or query type.'}</div>
+                            <div className="empty-state">
+                                <div className="empty-state-icon" style={{ fontSize: 36 }}>🌐</div>
+                                <div className="empty-state-title">No geo data</div>
+                                <div className="empty-state-text">{data.message || 'The query returned no results. Try a different time range or query type.'}</div>
+                            </div>
                         </div>
                     )}
                     {!loading && !data && (
@@ -245,9 +261,11 @@ export default function GeoMap() {
                             position: 'absolute', inset: 0, background: 'rgba(247,247,247,0.9)',
                             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 999,
                         }}>
-                            <div style={{ fontSize: 40, marginBottom: 12 }}>🗺️</div>
-                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--pwc-black)' }}>Sign-in GeoMap</div>
-                            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>Select a query type and click <strong>Run Analysis</strong></div>
+                            <div className="empty-state">
+                                <div className="empty-state-icon" style={{ fontSize: 40 }}>🗺️</div>
+                                <div className="empty-state-title">Sign-in GeoMap</div>
+                                <div className="empty-state-text">Select a query type and click <strong>Run Analysis</strong></div>
+                            </div>
                         </div>
                     )}
                     {loading && (
@@ -262,12 +280,11 @@ export default function GeoMap() {
 
                     {/* Legend */}
                     {points.length > 0 && (
-                        <div style={{
+                        <div className="card-elevated" style={{
                             position: 'absolute', bottom: 20, right: 20, zIndex: 999,
-                            background: '#fff', border: '1px solid var(--border)', borderRadius: 8,
-                            padding: '12px 14px', boxShadow: '0 2px 12px rgba(0,0,0,.1)', minWidth: 160,
+                            padding: '12px 14px', minWidth: 160,
                         }}>
-                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--pwc-orange)', textTransform: 'uppercase', marginBottom: 8 }}>Activity Level</div>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--pwc-orange)', textTransform: 'uppercase', marginBottom: 8, letterSpacing: '0.06em' }}>Activity Level</div>
                             {[
                                 { color: '#C0392B', label: 'High (50%+ of max)' },
                                 { color: '#E67E22', label: 'Medium (15–50%)' },
@@ -284,9 +301,9 @@ export default function GeoMap() {
 
                 {/* IP list sidebar */}
                 {points.length > 0 && (
-                    <div style={{ width: 280, background: '#fff', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                        <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>
-                            TOP IPS BY ACTIVITY
+                    <div style={{ width: 280, background: 'var(--bg-card)', borderLeft: '1px solid var(--border)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+                            Top IPs by Activity
                         </div>
                         <div style={{ flex: 1, overflowY: 'auto', padding: '8px' }}>
                             {points.slice(0, 30).map(p => (
@@ -296,49 +313,61 @@ export default function GeoMap() {
                                         setSelectedIp(p);
                                         leafletMapRef.current?.setView([p.lat, p.lon], 8);
                                     }}
+                                    className="ip-card"
                                     style={{
-                                        padding: '8px 10px', borderRadius: 6, marginBottom: 4, cursor: 'pointer',
-                                        background: selectedIp?.ip === p.ip ? 'var(--pwc-orange-light)' : 'var(--pwc-pale-grey)',
+                                        marginBottom: 4, cursor: 'pointer',
+                                        background: selectedIp?.ip === p.ip ? 'var(--pwc-orange-light)' : 'var(--bg-base)',
                                         border: `1px solid ${selectedIp?.ip === p.ip ? 'var(--pwc-orange-border)' : 'transparent'}`,
                                         borderLeft: `3px solid ${p.threat_detected ? 'var(--critical)' : markerColor(p, data?.max_value || 1)}`,
-                                        transition: 'all 0.1s',
                                     }}
                                 >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                        <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600 }}>{p.ip}</span>
+                                        <span className="ip-addr">{p.ip}</span>
                                         <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--pwc-orange)', flexShrink: 0 }}>{p.value}</span>
                                     </div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                                    <div className="ip-meta">
                                         📍 {[p.city, p.country].filter(Boolean).join(', ') || 'Unknown'}
                                     </div>
-                                    <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
-                                        {p.threat_detected && <span style={{ background: '#FCEAEA', color: '#C0392B', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 10 }}>THREAT</span>}
-                                        {p.is_vpn && <span style={{ background: '#F0F0F0', color: '#666', fontSize: 10, padding: '1px 6px', borderRadius: 10 }}>VPN</span>}
-                                        {p.is_tor && <span style={{ background: '#FCEAEA', color: '#C0392B', fontSize: 10, padding: '1px 6px', borderRadius: 10 }}>TOR</span>}
-                                        {(p.abuse_score || 0) > 50 && <span style={{ background: '#FEF3E8', color: '#E67E22', fontSize: 10, padding: '1px 6px', borderRadius: 10 }}>ABUSE {p.abuse_score}%</span>}
+                                    <div className="ip-flags">
+                                        {p.threat_detected && <span className="badge badge-critical" style={{ fontSize: 9 }}>THREAT</span>}
+                                        {p.is_vpn && <span className="badge badge-muted" style={{ fontSize: 9 }}>VPN</span>}
+                                        {p.is_tor && <span className="badge badge-critical" style={{ fontSize: 9 }}>TOR</span>}
+                                        {(p.abuse_score || 0) > 50 && <span className="badge badge-high" style={{ fontSize: 9 }}>ABUSE {p.abuse_score}%</span>}
                                     </div>
                                 </div>
                             ))}
                         </div>
-                        {/* IP detail */}
+                        {/* IP detail — enhanced card */}
                         {selectedIp && (
-                            <div style={{ padding: 12, borderTop: '2px solid var(--pwc-orange)', background: 'var(--pwc-white)' }}>
-                                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8 }}>IP Details</div>
+                            <div className="card-elevated" style={{ margin: 10, padding: '14px 16px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+                                    <span className="ip-addr" style={{ fontSize: 13 }}>{selectedIp.ip}</span>
+                                    <div className={`health-light ${selectedIp.threat_detected ? 'red' : 'green'}`} />
+                                </div>
+                                {selectedIp.threat_detected && (
+                                    <div style={{ marginBottom: 8 }}>
+                                        <span className="badge badge-critical">Threat Detected</span>
+                                    </div>
+                                )}
                                 {[
-                                    ['IP', selectedIp.ip],
-                                    ['Location', [selectedIp.city, selectedIp.region, selectedIp.country].filter(Boolean).join(', ')],
-                                    ['Organization', selectedIp.org],
-                                    ['Activity', `${selectedIp.value} attempts`],
-                                    ['Abuse Score', selectedIp.abuse_score != null ? `${selectedIp.abuse_score}%` : null],
-                                    ['VPN', selectedIp.is_vpn ? 'Yes' : 'No'],
-                                    ['Tor Exit', selectedIp.is_tor ? 'Yes' : 'No'],
-                                    ['Threat', selectedIp.threat_description || (selectedIp.threat_detected ? 'Detected' : 'None')],
-                                ].filter(([, v]) => v != null && v !== '').map(([k, v]) => (
-                                    <div key={k as string} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4, gap: 8 }}>
-                                        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{k}</span>
-                                        <span style={{ fontFamily: k === 'IP' ? 'monospace' : undefined, fontWeight: 500, textAlign: 'right', wordBreak: 'break-all' }}>{v as string}</span>
+                                    { label: 'City/Country', value: [selectedIp.city, selectedIp.country].filter(Boolean).join(', ') || '?' },
+                                    { label: 'Region',       value: selectedIp.region || '—' },
+                                    { label: 'Org',          value: selectedIp.org || '—' },
+                                    { label: 'Activity',     value: `${selectedIp.value} attempts` },
+                                    { label: 'Abuse Score',  value: selectedIp.abuse_score != null ? `${selectedIp.abuse_score}/100` : '—' },
+                                    { label: 'VPN/Proxy',    value: selectedIp.is_vpn ? 'Yes' : 'No' },
+                                    { label: 'Tor Exit',     value: selectedIp.is_tor ? 'Yes' : 'No' },
+                                ].map(r => (
+                                    <div key={r.label} className="kv-row">
+                                        <div className="kv-label">{r.label}</div>
+                                        <div className="kv-value">{r.value}</div>
                                     </div>
                                 ))}
+                                {selectedIp.threat_description && (
+                                    <div style={{ marginTop: 8, fontSize: 11, color: 'var(--critical)', fontStyle: 'italic' }}>
+                                        {selectedIp.threat_description}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

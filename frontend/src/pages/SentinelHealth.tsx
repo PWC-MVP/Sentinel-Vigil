@@ -6,6 +6,7 @@ import {
     faCircleCheck, faCircleXmark, faCircleMinus,
     faChartBar, faFilePdf, faFileCode, faRefresh
 } from '@fortawesome/free-solid-svg-icons';
+import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface Overview {
     total_gb: number;
@@ -137,7 +138,6 @@ export default function SentinelHealth() {
     const filteredConnectors = connectors.filter(c =>
         c.table.toLowerCase().includes(search.toLowerCase()));
     const maxVolume = Math.max(...connectors.map(c => c.volume_mb), 1);
-    const maxTrend = Math.max(...trend.map(t => t.gb), 0.1);
 
     const Skeleton = () => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -188,29 +188,106 @@ export default function SentinelHealth() {
                     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
                         {/* KPI Row */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
+                        <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--low)' }}>
                                 <div className="stat-tile-label">Active Tables</div>
                                 <div className="stat-tile-value" style={{ color: 'var(--text-primary)' }}>{overview?.table_count ?? 0}</div>
-                                <div className="text-xs text-muted">{overview?.total_gb.toFixed(1)} GB ingested</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>{overview?.total_gb.toFixed(1)} GB ingested</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--low)' }}>
                                 <div className="stat-tile-label">Healthy Connectors</div>
                                 <div className="stat-tile-value" style={{ color: 'var(--low)' }}>{overview?.healthy_connectors ?? 0}</div>
-                                <div className="text-xs text-muted">Fresh within 2h</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>Fresh within 2h</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: `3px solid ${(overview?.critical_connectors ?? 0) > 0 ? 'var(--critical)' : 'var(--high)'}` }}>
                                 <div className="stat-tile-label">Stale / Critical</div>
                                 <div className="stat-tile-value" style={{ color: (overview?.critical_connectors ?? 0) > 0 ? 'var(--critical)' : 'var(--high)' }}>
                                     {(overview?.stale_connectors ?? 0) + (overview?.critical_connectors ?? 0)}
                                 </div>
-                                <div className="text-xs text-muted">{overview?.critical_connectors} critical gaps</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>{overview?.critical_connectors} critical gaps</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--info)' }}>
                                 <div className="stat-tile-label">Connected Agents</div>
                                 <div className="stat-tile-value" style={{ color: 'var(--info)' }}>{overview?.agents_online ?? 0}</div>
-                                <div className="text-xs text-muted">{overview?.agents_degraded} degraded · {overview?.agents_offline} offline</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>{overview?.agents_degraded} degraded · {overview?.agents_offline} offline</div>
                             </div>
+                        </div>
+
+                        {/* Agent status donut + connector health summary cards */}
+                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                            {/* Agent donut */}
+                            {overview && (
+                                <div className="card-elevated" style={{ flex: '1 1 300px', marginBottom: 0 }}>
+                                    <div className="chart-title">Agent Status Distribution</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                                        <div style={{ position: 'relative', width: 160, height: 160, flexShrink: 0 }}>
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <PieChart>
+                                                    <Pie
+                                                        data={[
+                                                            { name: 'Online',   value: overview.agents_online   || 0 },
+                                                            { name: 'Degraded', value: overview.agents_degraded || 0 },
+                                                            { name: 'Offline',  value: overview.agents_offline  || 0 },
+                                                        ]}
+                                                        cx="50%" cy="50%"
+                                                        innerRadius={48} outerRadius={70}
+                                                        dataKey="value" paddingAngle={4}
+                                                        startAngle={90} endAngle={-270}
+                                                    >
+                                                        <Cell fill="#27AE60" />
+                                                        <Cell fill="#D4AC0D" />
+                                                        <Cell fill="#C0392B" />
+                                                    </Pie>
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                </PieChart>
+                                            </ResponsiveContainer>
+                                            <div style={{
+                                                position: 'absolute', inset: 0,
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                flexDirection: 'column', pointerEvents: 'none',
+                                            }}>
+                                                <div style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)' }}>
+                                                    {(overview.agents_online || 0) + (overview.agents_degraded || 0) + (overview.agents_offline || 0)}
+                                                </div>
+                                                <div className="text-muted" style={{ fontSize: 9, fontWeight: 600, textTransform: 'uppercase' }}>Agents</div>
+                                            </div>
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                            {[
+                                                { label: 'Online',   value: overview.agents_online,   color: 'var(--low)',      dot: 'green' },
+                                                { label: 'Degraded', value: overview.agents_degraded, color: 'var(--medium)',   dot: 'yellow' },
+                                                { label: 'Offline',  value: overview.agents_offline,  color: 'var(--critical)', dot: 'red' },
+                                            ].map(r => (
+                                                <div key={r.label} className="kv-row">
+                                                    <div className="kv-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                        <div className={`health-light ${r.dot}`} />
+                                                        {r.label}
+                                                    </div>
+                                                    <div className="kv-value" style={{ color: r.color }}>{r.value ?? 0}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+                            {/* Connector health summary cards */}
+                            {overview && (
+                                <div style={{ flex: '1 1 300px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, alignContent: 'start' }}>
+                                    {[
+                                        { label: 'Healthy',  value: overview.healthy_connectors,  color: 'var(--low)',      dot: 'green' },
+                                        { label: 'Stale',    value: overview.stale_connectors,    color: 'var(--medium)',   dot: 'yellow' },
+                                        { label: 'Critical', value: overview.critical_connectors, color: 'var(--critical)', dot: 'red' },
+                                    ].map(m => (
+                                        <div key={m.label} className="card-metric">
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                                <div className={`health-light ${m.dot}`} />
+                                                <div className="card-metric-label">{m.label}</div>
+                                            </div>
+                                            <div className="card-metric-value" style={{ color: m.color, fontSize: 28 }}>{m.value ?? 0}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {/* Tabs */}
@@ -236,7 +313,8 @@ export default function SentinelHealth() {
                                         Data Connector Freshness
                                     </div>
                                     <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter tables…"
-                                        style={{ marginLeft: 'auto', padding: '6px 12px', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12, background: 'var(--bg-input)', color: 'var(--text-primary)', width: 200 }} />
+                                        className="form-input"
+                                        style={{ marginLeft: 'auto', width: 200, padding: '6px 12px', height: 34 }} />
                                 </div>
                                 <div className="data-table-wrap">
                                     <table className="data-table">
@@ -258,21 +336,27 @@ export default function SentinelHealth() {
                                                             <code style={{ fontSize: 11, fontWeight: 600 }}>{c.table}</code>
                                                         </div>
                                                     </td>
-                                                    <td><span className={`badge ${statusBadge(c.status)}`}>{c.status}</span></td>
+                                                    <td>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                            <div className={`health-light ${c.status === 'Healthy' ? 'green pulse' : c.status === 'Stale' ? 'yellow' : 'red'}`} />
+                                                            <span className={`badge ${statusBadge(c.status)}`}>{c.status}</span>
+                                                        </div>
+                                                    </td>
                                                     <td style={{ color: freshColor(c.freshness_hours), fontWeight: 700, fontSize: 12 }}>
                                                         {c.freshness_hours < 1
                                                             ? `${Math.round(c.freshness_hours * 60)}m ago`
                                                             : `${c.freshness_hours.toFixed(1)}h ago`}
                                                     </td>
-                                                    <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                                    <td className="text-muted" style={{ fontSize: 11 }}>
                                                         {c.last_received ? new Date(c.last_received).toLocaleString() : '—'}
                                                     </td>
-                                                    <td style={{ width: 180 }}>
+                                                    <td style={{ width: 200 }}>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                            <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
-                                                                <div style={{ width: `${Math.min((c.volume_mb / maxVolume) * 100, 100)}%`, height: '100%', background: 'var(--info)', borderRadius: 4 }} />
+                                                            <div className="progress-bar-wrap" style={{ flex: 1, marginBottom: 0 }}>
+                                                                <div className="progress-bar-fill blue"
+                                                                     style={{ width: `${Math.min((c.volume_mb / maxVolume) * 100, 100)}%` }} />
                                                             </div>
-                                                            <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 55 }}>{c.volume_mb.toFixed(1)} MB</span>
+                                                            <span className="text-muted" style={{ fontSize: 11, minWidth: 55 }}>{c.volume_mb.toFixed(1)} MB</span>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -324,13 +408,13 @@ export default function SentinelHealth() {
                                                                 <span className={`badge ${statusBadge(a.status)}`}>{a.status}</span>
                                                             </div>
                                                         </td>
-                                                        <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                                        <td className="text-muted" style={{ fontSize: 11 }}>
                                                             {a.last_heartbeat ? new Date(a.last_heartbeat).toLocaleString() : '—'}
                                                         </td>
                                                         <td style={{ fontSize: 12, fontWeight: 600, color: a.stale_minutes < 10 ? 'var(--low)' : a.stale_minutes < 60 ? 'var(--high)' : 'var(--critical)' }}>
                                                             {a.stale_minutes < 60 ? `${Math.round(a.stale_minutes)}m` : `${(a.stale_minutes / 60).toFixed(1)}h`}
                                                         </td>
-                                                        <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{a.beat_count.toLocaleString()}</td>
+                                                        <td className="text-muted" style={{ fontSize: 12 }}>{a.beat_count.toLocaleString()}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
@@ -342,13 +426,38 @@ export default function SentinelHealth() {
 
                         {/* Data Gaps */}
                         {tab === 'gaps' && (
+                            <div>
+                            {/* Gap warning cards */}
+                            {gaps.filter(g => g.gap_days > 0).length > 0 && (
+                                <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                    {gaps.filter(g => g.gap_days > 0).map((gap) => (
+                                        <div key={gap.table} className="card-elevated" style={{
+                                            borderLeft: '3px solid var(--critical)',
+                                            padding: '12px 16px',
+                                            marginBottom: 0,
+                                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                        }}>
+                                            <div>
+                                                <div className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{gap.table}</div>
+                                                <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }}>
+                                                    {gap.days_with_data} days with data · {gap.total_gb?.toFixed(2)} GB total
+                                                </div>
+                                            </div>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <div className="card-metric-value" style={{ fontSize: 24, color: 'var(--critical)' }}>{gap.gap_days}</div>
+                                                <div style={{ fontSize: 10, color: 'var(--critical)', fontWeight: 600, textTransform: 'uppercase' }}>Gap Days</div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                             <div className="card" style={{ padding: 0 }}>
                                 <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
                                     <div className="card-title" style={{ margin: 0 }}>
                                         <FontAwesomeIcon icon={faTriangleExclamation} className="card-title-icon" style={{ color: 'var(--high)' }} />
                                         Ingestion Gaps ({days}-day window)
                                     </div>
-                                    <div style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+                                    <div className="text-muted" style={{ marginLeft: 'auto', fontSize: 12 }}>
                                         Tables with missing days of data
                                     </div>
                                 </div>
@@ -384,10 +493,11 @@ export default function SentinelHealth() {
                                                             <td style={{ fontSize: 12 }}>{g.total_gb.toFixed(3)}</td>
                                                             <td style={{ width: 200 }}>
                                                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                                                    <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4 }}>
-                                                                        <div style={{ width: `${pct}%`, height: '100%', background: pct < 50 ? 'var(--critical)' : pct < 80 ? 'var(--high)' : 'var(--low)', borderRadius: 4 }} />
+                                                                    <div className="progress-bar-wrap" style={{ flex: 1, marginBottom: 0 }}>
+                                                                        <div className={`progress-bar-fill ${pct < 50 ? 'red' : pct < 80 ? 'orange' : 'green'}`}
+                                                                             style={{ width: `${pct}%` }} />
                                                                     </div>
-                                                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32 }}>{pct}%</span>
+                                                                    <span className="text-muted" style={{ fontSize: 11, minWidth: 32 }}>{pct}%</span>
                                                                 </div>
                                                             </td>
                                                         </tr>
@@ -397,6 +507,7 @@ export default function SentinelHealth() {
                                         </table>
                                     </div>
                                 )}
+                            </div>
                             </div>
                         )}
 
@@ -411,18 +522,26 @@ export default function SentinelHealth() {
                                     <div className="empty-state"><div className="empty-state-text">No trend data available</div></div>
                                 ) : (
                                     <div>
-                                        <div style={{ height: 200, display: 'flex', alignItems: 'flex-end', gap: 4, padding: '0 4px 8px' }}>
-                                            {trend.map((t, i) => (
-                                                <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, height: '100%', justifyContent: 'flex-end' }}
-                                                    title={`${t.date}: ${t.gb.toFixed(2)} GB`}>
-                                                    <div style={{ width: '100%', background: 'linear-gradient(180deg, var(--info) 0%, #4facfe88 100%)', borderRadius: '3px 3px 0 0', height: `${Math.max((t.gb / maxTrend) * 100, 2)}%`, transition: 'height 0.4s ease' }} />
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: 'var(--text-muted)', padding: '0 4px' }}>
-                                            <span>{trend[0]?.date}</span>
-                                            <span style={{ fontWeight: 600, color: 'var(--info)' }}>Peak: {Math.max(...trend.map(t => t.gb)).toFixed(2)} GB</span>
-                                            <span>{trend[trend.length - 1]?.date}</span>
+                                        {/* Recharts LineChart */}
+                                        <div className="chart-container chart-container-md" style={{ marginBottom: 16 }}>
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <LineChart data={trend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                                    <defs>
+                                                        <linearGradient id="gradHealth" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#D04A02" stopOpacity={0.1} />
+                                                            <stop offset="95%" stopColor="#D04A02" stopOpacity={0} />
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                           tickFormatter={(d: string) => d.slice(5)} />
+                                                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                           tickFormatter={(v: number) => `${v.toFixed(1)}GB`} />
+                                                    <Tooltip formatter={(v: any) => [`${Number(v).toFixed(2)} GB`, 'Volume']}
+                                                             contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Line type="monotone" dataKey="gb" stroke="#D04A02" strokeWidth={2} dot={false} />
+                                                </LineChart>
+                                            </ResponsiveContainer>
                                         </div>
                                         <div className="data-table-wrap" style={{ marginTop: 16 }}>
                                             <table className="data-table">
@@ -437,7 +556,7 @@ export default function SentinelHealth() {
                                                                     <td style={{ fontSize: 12 }}>{t.date}</td>
                                                                     <td style={{ fontWeight: 700 }}>{t.gb.toFixed(2)} GB</td>
                                                                     <td>
-                                                                        <span style={{ fontSize: 11, fontWeight: 600, color: delta > 20 ? 'var(--critical)' : delta < -20 ? 'var(--info)' : 'var(--text-muted)' }}>
+                                                                        <span className={`badge ${delta > 20 ? 'badge-critical' : delta < -20 ? 'badge-info' : 'badge-muted'}`} style={{ fontSize: 11, fontWeight: 600 }}>
                                                                             {delta > 0 ? '+' : ''}{delta.toFixed(1)}%
                                                                         </span>
                                                                     </td>

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { RadialBarChart, RadialBar, ResponsiveContainer, PolarAngleAxis } from 'recharts';
 import {
     faShieldHalved, faFileLines, faCircleCheck, faFire, faClipboardList,
     faThumbtack, faArrowLeft, faCheck, faXmark, faFilePdf, faFileCode,
@@ -170,13 +171,15 @@ function formatHours(h: number): string {
 }
 
 function ProgressBar({ pct, height = 6, color }: { pct: number; height?: number; color?: string }) {
+    const fillClass = color
+        ? ''
+        : pct < 30 ? 'red' : pct < 60 ? 'yellow' : 'green';
     return (
-        <div style={{ background: '#E5E5E5', borderRadius: 3, height, overflow: 'hidden', width: '100%' }}>
-            <div style={{
-                width: `${Math.min(pct, 100)}%`, height: '100%',
-                background: color ?? coverageColor(pct),
-                borderRadius: 3, transition: 'width 0.6s ease',
-            }} />
+        <div className="progress-bar-wrap" style={{ height }}>
+            <div
+                className={`progress-bar-fill ${fillClass}`}
+                style={{ width: `${Math.min(pct, 100)}%`, ...(color ? { background: color } : {}) }}
+            />
         </div>
     );
 }
@@ -452,6 +455,45 @@ export default function MitreCoverage() {
                 {/* ── Heatmap ── */}
                 {tab === 'heatmap' && (
                     <div>
+                        {/* Radial gauge + summary */}
+                        {summary && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 32, marginBottom: 24 }}>
+                                <div style={{ position: 'relative', width: 160, height: 160, flexShrink: 0 }}>
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <RadialBarChart
+                                            cx="50%" cy="50%"
+                                            innerRadius="60%" outerRadius="90%"
+                                            data={[{ value: summary.overall_coverage || 0, fill: '#D04A02' }]}
+                                            startAngle={90} endAngle={-270}
+                                        >
+                                            <PolarAngleAxis type="number" domain={[0, 100]} angleAxisId={0} tick={false} />
+                                            <RadialBar dataKey="value" cornerRadius={6} background={{ fill: '#F0F0F0' }} />
+                                        </RadialBarChart>
+                                    </ResponsiveContainer>
+                                    <div style={{
+                                        position: 'absolute', inset: 0,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        flexDirection: 'column', pointerEvents: 'none',
+                                    }}>
+                                        <div className="card-metric-value" style={{ fontSize: 26, color: 'var(--pwc-orange)' }}>
+                                            {summary.overall_coverage || 0}%
+                                        </div>
+                                        <div className="card-metric-label">Coverage</div>
+                                    </div>
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
+                                        MITRE ATT&amp;CK Coverage
+                                    </div>
+                                    <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+                                        {summary.covered_techniques} / {summary.total_techniques} techniques covered
+                                    </div>
+                                    <span className={`badge ${riskBadge(summary.overall_coverage)}`} style={{ fontSize: 12, padding: '4px 12px' }}>
+                                        Assessment: {summary.assessment}
+                                    </span>
+                                </div>
+                            </div>
+                        )}
                         <div style={{ marginBottom: 16, fontSize: 12, color: 'var(--text-muted)' }}>
                             Click a tactic cell to drill into technique details. Red = no coverage, green = strong coverage.
                         </div>
@@ -460,23 +502,32 @@ export default function MitreCoverage() {
                                 <div
                                     key={t.id}
                                     onClick={() => { setSelectedTactic(t.id); setTab('tactics'); }}
+                                    className="card-elevated"
                                     style={{
-                                        background: coverageBg(t.coverage),
-                                        border: `2px solid ${coverageColor(t.coverage)}`,
-                                        borderRadius: 8, padding: '14px 16px', cursor: 'pointer',
-                                        transition: 'all 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                        background: (t.coverage || 0) < 30 ? 'rgba(192,57,43,0.08)'
+                                                 : (t.coverage || 0) < 60  ? 'rgba(230,126,34,0.08)'
+                                                 : 'rgba(39,174,96,0.08)',
+                                        border: `1px solid ${(t.coverage || 0) < 30 ? 'rgba(192,57,43,0.2)'
+                                                             : (t.coverage || 0) < 60 ? 'rgba(230,126,34,0.2)'
+                                                             : 'rgba(39,174,96,0.2)'}`,
+                                        padding: '16px',
+                                        cursor: 'pointer',
                                     }}
-                                    onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-2px)')}
-                                    onMouseLeave={e => (e.currentTarget.style.transform = '')}
                                 >
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', flex: 1 }}>{t.name}</div>
-                                        <div style={{ fontSize: 20, fontWeight: 800, color: coverageColor(t.coverage), flexShrink: 0, marginLeft: 8 }}>{t.coverage}%</div>
+                                    <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 4,
+                                                  color: (t.coverage || 0) < 30 ? 'var(--critical)'
+                                                       : (t.coverage || 0) < 60 ? 'var(--high)' : 'var(--low)' }}>
+                                        {t.coverage || 0}%
                                     </div>
-                                    <ProgressBar pct={t.coverage} height={5} />
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 10, color: 'var(--text-muted)' }}>
-                                        <span>{t.techniques_covered}/{t.techniques_total} techniques</span>
-                                        <span>{t.incidents.toLocaleString()} incidents</span>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                        {t.name}
+                                    </div>
+                                    <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8 }}>
+                                        {t.techniques_covered}/{t.techniques_total} techniques · {t.incidents.toLocaleString()} incidents
+                                    </div>
+                                    <div className="progress-bar-wrap" style={{ height: 5 }}>
+                                        <div className={`progress-bar-fill ${(t.coverage || 0) < 30 ? 'red' : (t.coverage || 0) < 60 ? 'yellow' : 'green'}`}
+                                             style={{ width: `${t.coverage || 0}%` }} />
                                     </div>
                                 </div>
                             ))}
@@ -550,7 +601,7 @@ export default function MitreCoverage() {
                                         <tbody>
                                             {selected.techniques_list.map((tech, i) => (
                                                 <tr key={i}>
-                                                    <td><code style={{ fontSize: 11 }}>{tech.id}</code></td>
+                                                    <td><code className="mono" style={{ fontSize: 11 }}>{tech.id}</code></td>
                                                     <td style={{ fontSize: 12 }}>{tech.name}</td>
                                                     <td>
                                                         <span className={`badge ${tech.covered ? 'badge-low' : 'badge-critical'}`} style={{ display: 'flex', alignItems: 'center', gap: 6, width: 'fit-content' }}>
@@ -618,7 +669,7 @@ export default function MitreCoverage() {
                                 <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
                                     <FontAwesomeIcon icon={faMagnifyingGlass} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
                                     <input
-                                        className="input"
+                                        className="form-input"
                                         placeholder="Search rule name or technique…"
                                         value={ucSearch}
                                         onChange={e => setUcSearch(e.target.value)}
@@ -631,13 +682,13 @@ export default function MitreCoverage() {
                                         <button
                                             key={s}
                                             onClick={() => setUcStatusFilter(s)}
-                                            className={`badge ${ucStatusFilter === s ? (s === 'Enabled' ? 'badge-low' : s === 'Disabled' ? 'badge-critical' : 'badge-primary') : 'badge-muted'}`}
+                                            className={`badge ${ucStatusFilter === s ? (s === 'Enabled' ? 'badge-low' : s === 'Disabled' ? 'badge-critical' : 'badge-pwc') : 'badge-muted'}`}
                                             style={{ cursor: 'pointer', border: 'none', padding: '4px 10px', fontSize: 11 }}
                                         >{s}</button>
                                     ))}
                                 </div>
                                 <select
-                                    className="input"
+                                    className="form-select"
                                     value={ucKindFilter}
                                     onChange={e => setUcKindFilter(e.target.value)}
                                     style={{ height: 34, fontSize: 12 }}
@@ -646,7 +697,7 @@ export default function MitreCoverage() {
                                     {ucKinds.map(k => <option key={k} value={k}>{k}</option>)}
                                 </select>
                                 <select
-                                    className="input"
+                                    className="form-select"
                                     value={ucTacticFilter}
                                     onChange={e => setUcTacticFilter(e.target.value)}
                                     style={{ height: 34, fontSize: 12 }}
@@ -708,7 +759,7 @@ export default function MitreCoverage() {
                                                                 <td>
                                                                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                                                                         {uc.techniques.slice(0, 4).map(t => (
-                                                                            <code key={t} style={{ fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>{t}</code>
+                                                                            <code key={t} className="mono" style={{ fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 5px' }}>{t}</code>
                                                                         ))}
                                                                         {uc.techniques.length > 4 && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{uc.techniques.length - 4}</span>}
                                                                         {uc.techniques.length === 0 && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>—</span>}
@@ -826,8 +877,8 @@ export default function MitreCoverage() {
                                                         <div style={{ flex: 1, minWidth: 0 }}>
                                                             <div style={{ fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.title}>{r.title}</div>
                                                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                                                                <div style={{ flex: 1, background: '#E5E5E5', borderRadius: 2, height: 4, overflow: 'hidden' }}>
-                                                                    <div style={{ width: `${(r.fp_count / maxFp) * 100}%`, height: '100%', background: 'var(--critical)', borderRadius: 2 }} />
+                                                                <div className="progress-bar-wrap" style={{ flex: 1, height: 4 }}>
+                                                                    <div className="progress-bar-fill red" style={{ width: `${(r.fp_count / maxFp) * 100}%` }} />
                                                                 </div>
                                                                 <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }}>{r.fp_count} FPs</span>
                                                             </div>
@@ -904,7 +955,7 @@ export default function MitreCoverage() {
                                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                                             {techHits.slice(0, 15).map(t => (
                                                 <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                                    <code style={{ fontSize: 11, width: 70, flexShrink: 0, color: 'var(--pwc-orange)' }}>{t.id}</code>
+                                                    <code className="mono" style={{ fontSize: 11, width: 70, flexShrink: 0, color: 'var(--pwc-orange)' }}>{t.id}</code>
                                                     <div style={{ flex: 1, background: '#E5E5E5', borderRadius: 3, height: 18, overflow: 'hidden', position: 'relative' }}>
                                                         {/* Stacked: high / medium / low */}
                                                         <div style={{ display: 'flex', height: '100%' }}>
@@ -947,12 +998,12 @@ export default function MitreCoverage() {
                                                 <tbody>
                                                     {techHits.map((t, i) => (
                                                         <tr key={i}>
-                                                            <td><code style={{ fontSize: 11, color: 'var(--pwc-orange)' }}>{t.id}</code></td>
+                                                            <td><code className="mono" style={{ fontSize: 11, color: 'var(--pwc-orange)' }}>{t.id}</code></td>
                                                             <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t.tactics || '—'}</td>
                                                             <td style={{ fontWeight: 700 }}>{t.alert_count.toLocaleString()}</td>
-                                                            <td style={{ color: 'var(--critical)', fontWeight: 600 }}>{t.high_count || '—'}</td>
-                                                            <td style={{ color: 'var(--high)', fontWeight: 600 }}>{t.medium_count || '—'}</td>
-                                                            <td style={{ color: 'var(--medium)', fontWeight: 600 }}>{t.low_count || '—'}</td>
+                                                            <td><span className="badge badge-critical" style={{ fontSize: 10 }}>{t.high_count || '—'}</span></td>
+                                                            <td><span className="badge badge-high" style={{ fontSize: 10 }}>{t.medium_count || '—'}</span></td>
+                                                            <td><span className="badge badge-medium" style={{ fontSize: 10 }}>{t.low_count || '—'}</span></td>
                                                             <td style={{ fontSize: 11 }}>{t.unique_rules}</td>
                                                             <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{relativeTime(t.last_seen)}</td>
                                                         </tr>
@@ -992,20 +1043,16 @@ export default function MitreCoverage() {
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
                                             <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>#{rule.id}</span>
                                             <span className={`badge ${priorityBadge(rule.priority)}`}>{rule.priority}</span>
-                                            <code style={{ fontSize: 11, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', color: 'var(--pwc-orange)' }}>{rule.technique}</code>
+                                            <code className="mono" style={{ fontSize: 11, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', color: 'var(--pwc-orange)' }}>{rule.technique}</code>
                                             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{rule.tactic_name}</span>
                                         </div>
                                         <div style={{ fontSize: 14, fontWeight: 700 }}>{rule.technique_name}</div>
                                     </div>
                                     <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
-                                        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--pwc-orange)' }}>~{rule.estimated_incidents.toLocaleString()}</div>
-                                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>est. incidents/qtr</div>
+                                        <div className="card-metric-value" style={{ fontSize: 18, color: 'var(--pwc-orange)' }}>~{rule.estimated_incidents.toLocaleString()}</div>
+                                        <div className="card-metric-label">est. incidents/qtr</div>
                                         <div style={{ marginTop: 4 }}>
-                                            <span style={{
-                                                fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
-                                                background: rule.implementation_effort === 'Low' ? 'rgba(39,174,96,0.1)' : rule.implementation_effort === 'High' ? 'rgba(192,57,43,0.1)' : 'rgba(230,126,34,0.1)',
-                                                color: rule.implementation_effort === 'Low' ? 'var(--low)' : rule.implementation_effort === 'High' ? 'var(--critical)' : 'var(--high)',
-                                            }}>
+                                            <span className={`badge ${rule.implementation_effort === 'Low' ? 'badge-low' : rule.implementation_effort === 'High' ? 'badge-critical' : 'badge-high'}`} style={{ fontSize: 10 }}>
                                                 {rule.implementation_effort} effort
                                             </span>
                                         </div>
@@ -1032,7 +1079,7 @@ export default function MitreCoverage() {
                                 )}
                                 <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 4, padding: '10px 12px' }}>
                                     <div style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>KQL Detection Template</div>
-                                    <pre style={{ margin: 0, fontSize: 11, fontFamily: 'JetBrains Mono, Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--pwc-orange)', lineHeight: 1.6 }}>{rule.rule_template}</pre>
+                                    <pre className="mono" style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--pwc-orange)', lineHeight: 1.6 }}>{rule.rule_template}</pre>
                                 </div>
                             </div>
                         ))}
@@ -1042,6 +1089,25 @@ export default function MitreCoverage() {
                 {/* ── Log Sources ── */}
                 {tab === 'log-sources' && (
                     <div>
+                        {/* Missing log sources chips */}
+                        {logSources && logSources.filter(s => s.status === 'ABSENT').length > 0 && (
+                            <div className="card" style={{ marginBottom: 20 }}>
+                                <div className="card-title">Missing Log Sources</div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                    {logSources.filter(s => s.status === 'ABSENT').map((src, i) => (
+                                        <span key={i}
+                                            className="chip"
+                                            style={{ borderColor: 'rgba(192,57,43,0.4)', color: 'var(--critical)',
+                                                     background: 'rgba(192,57,43,0.06)', cursor: 'pointer' }}
+                                            onClick={() => navigator.clipboard?.writeText(src.source_name)}
+                                            title="Click to copy"
+                                        >
+                                            {src.source_name}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {/* Summary strip */}
                         <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 20 }}>
                             {[
@@ -1084,13 +1150,13 @@ export default function MitreCoverage() {
                                                         <span className="badge badge-muted" style={{ fontSize: 10 }}>{src.category}</span>
                                                         <span className={`badge ${src.priority === 'CRITICAL' ? 'badge-critical' : src.priority === 'HIGH' ? 'badge-high' : 'badge-medium'}`} style={{ fontSize: 10 }}>{src.priority}</span>
                                                     </div>
-                                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', display: 'inline-block', marginBottom: 8 }}>
+                                                    <code className="mono" style={{ fontSize: 11, color: 'var(--text-muted)', background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '3px 8px', display: 'inline-block', marginBottom: 8 }}>
                                                         {src.sentinel_table}
-                                                    </div>
+                                                    </code>
                                                 </div>
                                                 <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 16 }}>
-                                                    <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--low)' }}>+{src.estimated_coverage_gain}%</div>
-                                                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>coverage gain</div>
+                                                    <div className="card-metric-value" style={{ fontSize: 22, color: 'var(--low)' }}>+{src.estimated_coverage_gain}%</div>
+                                                    <div className="card-metric-label">coverage gain</div>
                                                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', marginTop: 4 }}>{src.technique_count} techniques</div>
                                                 </div>
                                             </div>
@@ -1104,14 +1170,14 @@ export default function MitreCoverage() {
                                                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
                                                     <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Tactics:</span>
                                                     {src.tactics_affected.map(t => (
-                                                        <span key={t} style={{ fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', color: 'var(--text-secondary)' }}>{t}</span>
+                                                        <span key={t} className="badge badge-muted" style={{ fontSize: 10 }}>{t}</span>
                                                     ))}
                                                 </div>
                                             </div>
-                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
-                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', alignSelf: 'center' }}>Techniques:</span>
+                                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+                                                <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Techniques:</span>
                                                 {src.techniques_covered.map(t => (
-                                                    <code key={t} style={{ fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', color: 'var(--pwc-orange)' }}>{t}</code>
+                                                    <code key={t} className="mono" style={{ fontSize: 10, background: 'var(--bg-base)', border: '1px solid var(--border)', borderRadius: 3, padding: '1px 6px', color: 'var(--pwc-orange)' }}>{t}</code>
                                                 ))}
                                             </div>
 

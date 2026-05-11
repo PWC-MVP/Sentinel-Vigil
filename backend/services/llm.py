@@ -10,20 +10,30 @@ from typing import AsyncGenerator
 logger = logging.getLogger(__name__)
 
 
+ANTHROPIC_DIRECT_URL = "https://api.anthropic.com/v1/messages"
+
+
 def _llm_creds() -> dict:
     """Read LLM credentials fresh from os.environ on every call so .env changes apply immediately."""
     return {
-        "anthropic_key":       (os.getenv("AZURE_ANTHROPIC_API_KEY") or "").strip(),
-        "anthropic_endpoint":  (os.getenv("AZURE_ANTHROPIC_ENDPOINT") or "").strip(),
-        "anthropic_model":     os.getenv("AZURE_ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        "anthropic_key":        (os.getenv("AZURE_ANTHROPIC_API_KEY") or "").strip(),
+        "anthropic_endpoint":   (os.getenv("AZURE_ANTHROPIC_ENDPOINT") or "").strip(),
+        "anthropic_model":      os.getenv("AZURE_ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         "anthropic_max_tokens": int(os.getenv("AZURE_ANTHROPIC_MAX_TOKENS", "8192")),
-        "azure_endpoint":     (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip(),
-        "azure_key":          (os.getenv("AZURE_OPENAI_API_KEY") or "").strip(),
-        "azure_deploy":       os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
-        "azure_version":      os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
-        "openai_key":         (os.getenv("OPENAI_API_KEY") or "").strip(),
-        "openai_model":       os.getenv("OPENAI_MODEL", "gpt-4o"),
+        # Direct Anthropic API (api.anthropic.com) — supports all models without separate deployments
+        "anthropic_direct_key": (os.getenv("ANTHROPIC_API_KEY") or "").strip(),
+        "azure_endpoint":       (os.getenv("AZURE_OPENAI_ENDPOINT") or "").strip(),
+        "azure_key":            (os.getenv("AZURE_OPENAI_API_KEY") or "").strip(),
+        "azure_deploy":         os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o"),
+        "azure_version":        os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview"),
+        "openai_key":           (os.getenv("OPENAI_API_KEY") or "").strip(),
+        "openai_model":         os.getenv("OPENAI_MODEL", "gpt-4o"),
     }
+
+
+def _is_deployment_not_found(err: str) -> bool:
+    """True when Azure returned a 404 because the model deployment doesn't exist."""
+    return "DEPLOYMENT_NOT_FOUND" in err or "DeploymentNotFound" in err
 
 SYSTEM_PROMPT = """You are ARIA (Advanced Risk Intelligence Assistant), a elite Tier-3 Cyber Security Analyst built for the PwC Sentinel Engineering Team.
 
@@ -64,7 +74,10 @@ Your goal is to provide deep, actionable insights into security telemetry from M
 def get_llm_status() -> dict:
     c = _llm_creds()
     if c["anthropic_key"] and c["anthropic_endpoint"]:
-        return {"available": True, "provider": "Azure Anthropic", "model": c["anthropic_model"]}
+        extra = " (+direct fallback)" if c["anthropic_direct_key"] else ""
+        return {"available": True, "provider": f"Azure Anthropic{extra}", "model": c["anthropic_model"]}
+    if c["anthropic_direct_key"]:
+        return {"available": True, "provider": "Anthropic (direct)", "model": c["anthropic_model"]}
     if c["azure_key"] and c["azure_endpoint"]:
         return {"available": True, "provider": "Azure OpenAI", "model": c["azure_deploy"]}
     if c["openai_key"]:
@@ -280,7 +293,16 @@ async def complete(system: str, user_msg: str, model: str | None = None) -> dict
     """
     c = _llm_creds()
     if c["anthropic_key"] and c["anthropic_endpoint"]:
-        return await _complete_anthropic(system, user_msg, model=model)
+        try:
+            return await _complete_anthropic(system, user_msg, model=model)
+        except RuntimeError as e:
+            # If Azure says the model deployment doesn't exist, retry via direct Anthropic API
+            if _is_deployment_not_found(str(e)) and c["anthropic_direct_key"]:
+                logger.warning("Azure deployment not found for model '%s', retrying via direct Anthropic API", model)
+                return await _complete_anthropic_direct(system, user_msg, model=model)
+            raise
+    if c["anthropic_direct_key"]:
+        return await _complete_anthropic_direct(system, user_msg, model=model)
     if c["azure_key"] and c["azure_endpoint"]:
         return await _complete_openai(system, user_msg, use_azure=True)
     if c["openai_key"]:
@@ -394,6 +416,131 @@ async def _complete_anthropic(system: str, user_msg: str, model: str | None = No
     raise RuntimeError(f"Anthropic API rejected all max_tokens budgets. Last error: {last_err}")
 
 
+# ── Direct Anthropic API (api.anthropic.com) ──────────────────────────────────
+# Supports all Claude models without needing per-model Azure deployments.
+
+async def _complete_anthropic_direct(system: str, user_msg: str, model: str | None = None) -> dict:
+    """Single-turn completion via api.anthropic.com — no Azure deployment required."""
+    c = _llm_creds()
+    anthropic_model = model or c["anthropic_model"]
+    max_tok = min(c["anthropic_max_tokens"], 8192)
+    headers = {
+        "x-api-key": c["anthropic_direct_key"],
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": anthropic_model,
+        "messages": [{"role": "user", "content": user_msg}],
+        "system": system,
+        "max_tokens": max_tok,
+        "stream": False,
+    }
+    async with httpx.AsyncClient() as client:
+        r = await client.post(ANTHROPIC_DIRECT_URL, json=payload, headers=headers, timeout=180.0)
+        if r.status_code != 200:
+            raise RuntimeError(f"Anthropic direct API {r.status_code}: {r.text[:500]}")
+        data = r.json()
+        if data.get("type") == "error":
+            raise RuntimeError(f"Anthropic direct error: {data.get('error', {}).get('message', str(data))}")
+        usage = data.get("usage", {})
+        text = data["content"][0]["text"]
+        stop_why = data.get("stop_reason", "")
+        total_in = usage.get("input_tokens", 0)
+        total_out = usage.get("output_tokens", 0)
+
+        # Continuation if truncated
+        for _pass in range(3):
+            if stop_why != "max_tokens" or not text:
+                break
+            cont_payload = {
+                "model": anthropic_model,
+                "messages": [
+                    {"role": "user", "content": user_msg},
+                    {"role": "assistant", "content": text},
+                    {"role": "user", "content": "Continue exactly where it was cut off. No preamble."},
+                ],
+                "system": system,
+                "max_tokens": max_tok,
+                "stream": False,
+            }
+            cr = await client.post(ANTHROPIC_DIRECT_URL, json=cont_payload, headers=headers, timeout=180.0)
+            if cr.status_code != 200:
+                break
+            cd = cr.json()
+            text += cd["content"][0]["text"]
+            stop_why = cd.get("stop_reason", "")
+            total_out += cd.get("usage", {}).get("output_tokens", 0)
+
+    return {"text": text, "usage": {"input_tokens": total_in, "output_tokens": total_out, "model": anthropic_model}}
+
+
+async def _stream_complete_anthropic_direct(system: str, user_msg: str, model: str | None = None):
+    """Streaming completion via api.anthropic.com."""
+    c = _llm_creds()
+    anthropic_model = model or c["anthropic_model"]
+    max_tok = min(c["anthropic_max_tokens"], 8192)
+    headers = {
+        "x-api-key": c["anthropic_direct_key"],
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    messages = [{"role": "user", "content": user_msg}]
+    full_text = ""
+    total_in = 0
+    total_out = 0
+
+    for _pass in range(4):
+        payload = {
+            "model": anthropic_model,
+            "messages": messages,
+            "system": system,
+            "max_tokens": max_tok,
+            "stream": True,
+        }
+        stop_reason = None
+        pass_text = ""
+
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", ANTHROPIC_DIRECT_URL, json=payload, headers=headers, timeout=300.0) as resp:
+                if resp.status_code != 200:
+                    err = await resp.aread()
+                    raise RuntimeError(f"Anthropic direct API {resp.status_code}: {err.decode()[:500]}")
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data_str)
+                    except Exception:
+                        continue
+                    e_type = event.get("type")
+                    if e_type == "message_start":
+                        total_in += event.get("message", {}).get("usage", {}).get("input_tokens", 0)
+                    elif e_type == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            chunk = delta["text"]
+                            pass_text += chunk
+                            yield {"type": "text", "text": chunk}
+                    elif e_type == "message_delta":
+                        stop_reason = event.get("delta", {}).get("stop_reason")
+                        total_out += event.get("usage", {}).get("output_tokens", 0)
+
+        full_text += pass_text
+        if stop_reason != "max_tokens" or not pass_text:
+            break
+        messages = [
+            {"role": "user", "content": user_msg},
+            {"role": "assistant", "content": full_text},
+            {"role": "user", "content": "Continue exactly where it was cut off. No preamble."},
+        ]
+
+    yield {"type": "usage", "input_tokens": total_in, "output_tokens": total_out, "model": anthropic_model}
+
+
 # ── Streaming single-turn completion (no tool use) ────────────────────────────
 
 async def stream_complete(system: str, user_msg: str, model: str | None = None):
@@ -402,11 +549,23 @@ async def stream_complete(system: str, user_msg: str, model: str | None = None):
       {"type":"text",  "text": str}          — each text chunk from the LLM
       {"type":"usage", "input_tokens": int,
                        "output_tokens": int, "model": str}  — final event
-    Handles automatic continuation when the model hits max_tokens.
+    Falls back to direct Anthropic API if the Azure deployment is not found.
     """
     c = _llm_creds()
     if c["anthropic_key"] and c["anthropic_endpoint"]:
-        async for item in _stream_complete_anthropic(system, user_msg, model=model):
+        try:
+            async for item in _stream_complete_anthropic(system, user_msg, model=model):
+                yield item
+            return
+        except RuntimeError as e:
+            if _is_deployment_not_found(str(e)) and c["anthropic_direct_key"]:
+                logger.warning("Azure deployment not found for model '%s', falling back to direct Anthropic", model)
+                async for item in _stream_complete_anthropic_direct(system, user_msg, model=model):
+                    yield item
+                return
+            raise
+    if c["anthropic_direct_key"]:
+        async for item in _stream_complete_anthropic_direct(system, user_msg, model=model):
             yield item
     elif c["azure_key"] and c["azure_endpoint"]:
         async for item in _stream_complete_openai_nc(system, user_msg, use_azure=True):

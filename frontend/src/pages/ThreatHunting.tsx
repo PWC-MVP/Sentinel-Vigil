@@ -5,7 +5,7 @@ import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
     faCrosshairs, faPlay, faSearch, faCode, faXmark,
     faTriangleExclamation, faCircleCheck, faSpinner,
-    faFilter, faChevronRight, faFileLines, faBrain
+    faFileLines, faBrain
 } from '@fortawesome/free-solid-svg-icons';
 
 interface HuntQuery {
@@ -33,11 +33,26 @@ interface HuntAnalysis {
     recommendations: string[];
 }
 
+function getTacticBadgeClass(tactic: string): string {
+    const t = (tactic || '').toLowerCase();
+    if (t.includes('identity') || t.includes('initial'))         return 'tactic-badge-identity';
+    if (t.includes('execution'))                                  return 'tactic-badge-execution';
+    if (t.includes('persist'))                                    return 'tactic-badge-persistence';
+    if (t.includes('privilege') || t.includes('escalation'))     return 'tactic-badge-priv-esc';
+    if (t.includes('defense') || t.includes('evasion'))          return 'tactic-badge-defense-evasion';
+    if (t.includes('credential'))                                 return 'tactic-badge-credential';
+    if (t.includes('collection'))                                 return 'tactic-badge-collection';
+    if (t.includes('exfil'))                                      return 'tactic-badge-exfiltration';
+    if (t.includes('lateral'))                                    return 'tactic-badge-lateral';
+    return 'tactic-badge-default';
+}
+
 function sevBadge(s: string) {
     if (s === 'Critical' || s === 'High') return 'badge-critical';
     if (s === 'Medium') return 'badge-high';
     return 'badge-low';
 }
+
 const CAT_COLORS: Record<string, string> = {
     Identity: '#3498DB',
     Execution: '#E67E22',
@@ -206,10 +221,11 @@ export default function ThreatHunting() {
                             value={reportModel}
                             onChange={e => setReportModel(e.target.value)}
                             disabled={reportLoading}
-                            style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                            className="form-select"
+                            style={{ fontSize: 12, padding: '4px 8px', height: 34 }}
                         >
                             <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                            <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                            <option value="claude-haiku-4-5">Haiku 4.5</option>
                         </select>
                         <button
                             className="btn btn-primary"
@@ -257,74 +273,102 @@ export default function ThreatHunting() {
                             <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}>
                                 <div style={{ position: 'relative' }}>
                                     <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
-                                    <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search hunts, techniques, descriptions…"
-                                        style={{ width: '100%', paddingLeft: 30, padding: '8px 10px 8px 30px', border: '1px solid var(--border-color)', borderRadius: 8, fontSize: 12, background: 'var(--bg-card)', color: 'var(--text-primary)', boxSizing: 'border-box' }} />
+                                    <input
+                                        value={search}
+                                        onChange={e => setSearch(e.target.value)}
+                                        placeholder="Search hunts, techniques, descriptions…"
+                                        className="form-input"
+                                        style={{ width: '100%', paddingLeft: 30, boxSizing: 'border-box' }}
+                                    />
                                 </div>
-                                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                                    <FontAwesomeIcon icon={faFilter} style={{ color: 'var(--text-muted)', fontSize: 11 }} />
-                                    {categories.map(c => (
-                                        <button key={c} onClick={() => setSelectedCat(c)}
-                                            className={`btn btn-sm ${selectedCat === c ? 'btn-primary' : 'btn-ghost'}`}
-                                            style={{ borderRadius: 20, fontSize: 10, padding: '3px 10px' }}>
-                                            {c}
-                                        </button>
-                                    ))}
-                                </div>
+                                {categories && categories.length > 0 && (
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                        {categories.map(c => (
+                                            <button
+                                                key={c}
+                                                className={`chip ${selectedCat === c ? 'active' : ''}`}
+                                                onClick={() => setSelectedCat(c)}
+                                            >
+                                                {c}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
 
                             {/* Query Cards */}
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                {filtered.length === 0 && (
-                                    <div className="empty-state"><div className="empty-state-text">No hunts match the filter</div></div>
-                                )}
+                            {filtered.length === 0 && (
+                                <div className="empty-state"><div className="empty-state-text">No hunts match the filter</div></div>
+                            )}
+                            <div style={{ display: 'grid', gridTemplateColumns: selectedHunt ? '1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
                                 {filtered.map(q => {
                                     const hasResult = !!results[q.id];
                                     const res = results[q.id];
                                     const isActive = selectedHunt?.id === q.id;
                                     const isRunning = runningId === q.id;
-                                    const catColor = CAT_COLORS[q.category] || '#7F8C8D';
                                     return (
                                         <div key={q.id}
-                                            onClick={() => setSelectedHunt(q)}
+                                            className="card-elevated"
+                                            onClick={() => setSelectedHunt(isActive ? null : q)}
                                             style={{
-                                                background: isActive ? 'var(--bg-higher)' : 'var(--bg-card)',
-                                                border: `1px solid ${isActive ? 'var(--brand)' : 'var(--border-color)'}`,
-                                                borderRadius: 10, padding: '12px 14px', cursor: 'pointer',
-                                                transition: 'all 0.15s', boxShadow: isActive ? '0 0 0 2px rgba(208,74,2,0.15)' : '0 1px 3px rgba(0,0,0,0.04)',
+                                                padding: 18, cursor: 'pointer',
+                                                outline: isActive ? '2px solid var(--brand)' : 'none',
                                             }}
-                                            onMouseEnter={e => { if (!isActive) e.currentTarget.style.borderColor = 'var(--brand)'; }}
-                                            onMouseLeave={e => { if (!isActive) e.currentTarget.style.borderColor = 'var(--border-color)'; }}
                                         >
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                                                <div style={{ flex: 1, paddingRight: 8 }}>
-                                                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>{q.title}</div>
-                                                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                                        <span style={{ fontSize: 9, fontWeight: 800, color: catColor, background: `${catColor}18`, padding: '2px 7px', borderRadius: 10 }}>{q.category}</span>
-                                                        <span className={`badge ${sevBadge(q.severity)}`} style={{ fontSize: 9 }}>{q.severity}</span>
-                                                        <code style={{ fontSize: 9, color: 'var(--text-muted)', background: 'var(--bg-base)', padding: '2px 5px', borderRadius: 4 }}>{q.mitre_technique}</code>
-                                                    </div>
+                                            {/* Header: severity badge + category */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                                                <span className={`badge ${sevBadge(q.severity)}`}>
+                                                    {q.severity}
+                                                </span>
+                                                <span className="chip" style={{ fontSize: 10, padding: '2px 8px', cursor: 'default',
+                                                    color: CAT_COLORS[q.category] || '#7F8C8D',
+                                                    borderColor: `${CAT_COLORS[q.category] || '#7F8C8D'}40`,
+                                                    background: `${CAT_COLORS[q.category] || '#7F8C8D'}12`,
+                                                }}>
+                                                    {q.category}
+                                                </span>
+                                            </div>
+                                            {/* Title */}
+                                            <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', marginBottom: 6, lineHeight: 1.4 }}>
+                                                {q.title}
+                                            </div>
+                                            {/* MITRE tactic */}
+                                            {q.mitre_tactic && (
+                                                <div style={{ marginBottom: 8 }}>
+                                                    <span className={`tactic-badge ${getTacticBadgeClass(q.mitre_tactic)}`}>
+                                                        {q.mitre_tactic}
+                                                    </span>
                                                 </div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                            )}
+                                            {/* Description */}
+                                            <div style={{
+                                                fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6, marginBottom: 12,
+                                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                                            }}>
+                                                {q.description}
+                                            </div>
+                                            {/* Footer */}
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'auto' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                    <code className="mono" style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                                                        {q.mitre_technique}
+                                                    </code>
                                                     {hasResult && (
-                                                        <span style={{ fontSize: 10, fontWeight: 700, color: res.status === 'error' ? 'var(--critical)' : res.row_count > 0 ? 'var(--high)' : 'var(--low)' }}>
+                                                        <span className={`badge ${res.status === 'error' ? 'badge-critical' : res.row_count > 0 ? 'badge-high' : 'badge-low'}`} style={{ fontSize: 10 }}>
                                                             {res.status === 'error' ? '⚠ Error' : `${res.row_count} hits`}
                                                         </span>
                                                     )}
-                                                    <button
-                                                        className="btn btn-sm btn-primary"
-                                                        style={{ padding: '4px 10px', fontSize: 10, borderRadius: 6 }}
-                                                        onClick={e => { e.stopPropagation(); runHunt(q); }}
-                                                        disabled={isRunning}
-                                                    >
-                                                        {isRunning
-                                                            ? <FontAwesomeIcon icon={faSpinner} spin />
-                                                            : <FontAwesomeIcon icon={faPlay} />}
-                                                        {' '}{isRunning ? 'Running' : 'Run'}
-                                                    </button>
-                                                    <FontAwesomeIcon icon={faChevronRight} style={{ fontSize: 10, color: 'var(--text-muted)', opacity: isActive ? 1 : 0.4 }} />
                                                 </div>
+                                                <button
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={e => { e.stopPropagation(); runHunt(q); }}
+                                                    disabled={isRunning}
+                                                >
+                                                    {isRunning
+                                                        ? <><FontAwesomeIcon icon={faSpinner} spin style={{ marginRight: 4 }} />Running…</>
+                                                        : <><FontAwesomeIcon icon={faPlay} style={{ marginRight: 4 }} />Run Hunt</>}
+                                                </button>
                                             </div>
-                                            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5 }}>{q.description}</div>
                                         </div>
                                     );
                                 })}
@@ -343,8 +387,8 @@ export default function ThreatHunting() {
                                                     {selectedHunt.category}
                                                 </span>
                                                 <span className={`badge ${sevBadge(selectedHunt.severity)}`}>{selectedHunt.severity}</span>
-                                                <code style={{ fontSize: 10, color: 'var(--brand)', background: 'var(--pwc-orange-light)', padding: '3px 8px', borderRadius: 6, fontWeight: 700 }}>{selectedHunt.mitre_technique}</code>
-                                                <span style={{ fontSize: 11, color: 'var(--text-muted)', padding: '3px 0' }}>{selectedHunt.mitre_tactic}</span>
+                                                <code className="mono" style={{ fontSize: 10, color: 'var(--brand)', background: 'var(--pwc-orange-light)', padding: '3px 8px', borderRadius: 6, fontWeight: 700 }}>{selectedHunt.mitre_technique}</code>
+                                                <span className={`tactic-badge ${getTacticBadgeClass(selectedHunt.mitre_tactic)}`}>{selectedHunt.mitre_tactic}</span>
                                             </div>
                                         </div>
                                         <div style={{ display: 'flex', gap: 8 }}>
@@ -361,7 +405,7 @@ export default function ThreatHunting() {
                                     <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7, marginBottom: 14 }}>{selectedHunt.description}</div>
                                     <div style={{ background: 'var(--bg-base)', border: '1px solid var(--border-color)', borderRadius: 6, padding: '12px 14px' }}>
                                         <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 8, letterSpacing: '0.06em' }}>KQL Query</div>
-                                        <pre style={{ margin: 0, fontSize: 11, fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--text-primary)', lineHeight: 1.6 }}>{selectedHunt.query}</pre>
+                                        <pre className="mono" style={{ margin: 0, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: 'var(--text-primary)', lineHeight: 1.6 }}>{selectedHunt.query}</pre>
                                     </div>
                                 </div>
 
@@ -428,21 +472,14 @@ export default function ThreatHunting() {
                                         {selectedHunt && huntAnalyses[selectedHunt.id] && (() => {
                                             const ai = huntAnalyses[selectedHunt.id];
                                             return (
-                                                <div style={{
-                                                    margin: '0 16px 16px',
-                                                    padding: '16px 20px',
-                                                    background: 'linear-gradient(135deg, #0d1f3c 0%, #0a1628 100%)',
-                                                    border: '1px solid #1e40af40',
-                                                    borderLeft: '3px solid #3b82f6',
-                                                    borderRadius: '0 10px 10px 0',
-                                                }}>
-                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                                                        <FontAwesomeIcon icon={faBrain} style={{ color: '#3b82f6', fontSize: 13 }} />
-                                                        <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#93c5fd', background: '#1e40af', padding: '2px 10px', borderRadius: 999 }}>AI Analysis</span>
-                                                        <span style={{ fontSize: 10, color: '#64748b' }}>Powered by Claude</span>
+                                                <div className="card-elevated" style={{ margin: '0 16px 16px', padding: '16px 20px' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                                                        <FontAwesomeIcon icon={faBrain} style={{ color: 'var(--info)', fontSize: 13 }} />
+                                                        <span className="badge badge-info" style={{ fontSize: 10, padding: '2px 10px' }}>AI Analysis</span>
+                                                        <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Powered by Claude</span>
                                                         <button
                                                             className="btn btn-sm btn-ghost"
-                                                            style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 8px', color: '#3b82f6', borderColor: '#1e40af' }}
+                                                            style={{ marginLeft: 'auto', fontSize: 10, padding: '2px 8px' }}
                                                             onClick={() => analyzeHunt(selectedHunt, currentResult!)}
                                                             disabled={analyzingId === selectedHunt.id}
                                                             title="Re-run AI analysis"
@@ -451,36 +488,55 @@ export default function ThreatHunting() {
                                                         </button>
                                                     </div>
 
+                                                    {/* Indication */}
                                                     {ai.indication && (
-                                                        <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.7, marginBottom: 14, padding: '8px 12px', background: '#0f172a40', borderRadius: 6 }}>
-                                                            {ai.indication}
+                                                        <div style={{
+                                                            padding: '10px 14px',
+                                                            borderRadius: 'var(--radius-md)',
+                                                            marginBottom: 14,
+                                                            background: ai.indication?.toLowerCase().includes('critical') ? 'rgba(192,57,43,0.08)'
+                                                                      : ai.indication?.toLowerCase().includes('high')     ? 'rgba(230,126,34,0.08)'
+                                                                      : 'rgba(39,174,96,0.08)',
+                                                            border: `1px solid ${ai.indication?.toLowerCase().includes('critical') ? 'rgba(192,57,43,0.2)'
+                                                                                : ai.indication?.toLowerCase().includes('high')    ? 'rgba(230,126,34,0.2)'
+                                                                                : 'rgba(39,174,96,0.2)'}`,
+                                                        }}>
+                                                            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Threat Indication</div>
+                                                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{ai.indication}</div>
                                                         </div>
                                                     )}
 
-                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                                                        <div>
-                                                            <div style={{ fontSize: 10, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Remediation Steps</div>
-                                                            <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                                                                {ai.remediation.map((step, i) => (
-                                                                    <li key={i} style={{ fontSize: 11, color: '#94a3b8', padding: '5px 0 5px 18px', position: 'relative', lineHeight: 1.5, borderBottom: i < ai.remediation.length - 1 ? '1px solid #1e293b' : 'none' }}>
-                                                                        <span style={{ position: 'absolute', left: 0, color: '#3b82f6', fontWeight: 700 }}>→</span>
-                                                                        {step}
+                                                    {/* Remediation */}
+                                                    {ai.remediation && ai.remediation.length > 0 && (
+                                                        <div style={{ marginBottom: 14 }}>
+                                                            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: 'var(--critical)' }}>
+                                                                Remediation Steps
+                                                            </div>
+                                                            <ol style={{ paddingLeft: 16, margin: 0 }}>
+                                                                {ai.remediation.map((r, i) => (
+                                                                    <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.5 }}>
+                                                                        {r}
                                                                     </li>
                                                                 ))}
                                                             </ol>
                                                         </div>
+                                                    )}
+
+                                                    {/* Recommendations */}
+                                                    {ai.recommendations && ai.recommendations.length > 0 && (
                                                         <div>
-                                                            <div style={{ fontSize: 10, fontWeight: 800, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Recommendations</div>
-                                                            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                                                                {ai.recommendations.map((rec, i) => (
-                                                                    <li key={i} style={{ fontSize: 11, color: '#94a3b8', padding: '5px 0 5px 18px', position: 'relative', lineHeight: 1.5, borderBottom: i < ai.recommendations.length - 1 ? '1px solid #1e293b' : 'none' }}>
-                                                                        <span style={{ position: 'absolute', left: 0, color: '#3b82f6', fontWeight: 700 }}>→</span>
-                                                                        {rec}
+                                                            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 8, color: 'var(--info)' }}>
+                                                                Recommendations
+                                                            </div>
+                                                            <ul style={{ paddingLeft: 16, margin: 0 }}>
+                                                                {ai.recommendations.map((r, i) => (
+                                                                    <li key={i} style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4, lineHeight: 1.5 }}>
+                                                                        {r}
                                                                     </li>
                                                                 ))}
                                                             </ul>
                                                         </div>
-                                                    </div>
+                                                    )}
                                                 </div>
                                             );
                                         })()}
@@ -519,12 +575,8 @@ export default function ThreatHunting() {
                                 onChange={e => setCustomQuery(e.target.value)}
                                 placeholder={`// Enter your KQL hunting query here\nSigninLogs\n| where TimeGenerated > ago(7d)\n| where ResultType != 0\n| summarize FailureCount = count() by UserPrincipalName\n| sort by FailureCount desc`}
                                 rows={10}
-                                style={{
-                                    width: '100%', fontFamily: 'JetBrains Mono, monospace', fontSize: 12, lineHeight: 1.6,
-                                    padding: '12px 14px', border: '1px solid var(--border-color)', borderRadius: 8,
-                                    background: 'var(--bg-base)', color: 'var(--text-primary)', resize: 'vertical',
-                                    boxSizing: 'border-box',
-                                }}
+                                className="form-textarea mono"
+                                style={{ width: '100%', fontSize: 12, lineHeight: 1.6, boxSizing: 'border-box', resize: 'vertical' }}
                                 onKeyDown={e => { if (e.ctrlKey && e.key === 'Enter') runCustom(); }}
                             />
                             <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
@@ -568,9 +620,9 @@ export default function ThreatHunting() {
                                         </table>
                                     </div>
                                 ) : (
-                                    <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                                        <FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--low)', marginRight: 8 }} />
-                                        Query returned no results
+                                    <div className="empty-state" style={{ padding: 24 }}>
+                                        <div className="empty-state-icon"><FontAwesomeIcon icon={faCircleCheck} style={{ color: 'var(--low)', opacity: 0.6 }} /></div>
+                                        <div className="empty-state-text">Query returned no results</div>
                                     </div>
                                 )}
                             </div>

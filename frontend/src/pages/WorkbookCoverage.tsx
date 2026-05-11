@@ -286,8 +286,8 @@ function ScoreRing({ pct }: { pct: number }) {
                 />
             </svg>
             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>{pct}%</div>
-                <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Coverage</div>
+                <div className="card-metric-value" style={{ fontSize: 22, color, lineHeight: 1 }}>{pct}%</div>
+                <div className="text-muted" style={{ fontSize: 9, marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Coverage</div>
             </div>
         </div>
     );
@@ -350,10 +350,12 @@ function AiReportTab() {
                     <select
                         value={model}
                         onChange={e => setModel(e.target.value)}
-                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                        className="form-select"
+                        style={{ fontSize: 12, padding: '4px 8px' }}
                     >
                         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        <option value="claude-haiku-4-5">Haiku 4.5</option>
+
                     </select>
                     <button className="btn btn-primary" onClick={generate}>
                         <FontAwesomeIcon icon={faRobot} style={{ marginRight: 8 }} />
@@ -410,10 +412,12 @@ function AiReportTab() {
                         value={model}
                         onChange={e => setModel(e.target.value)}
                         disabled={loading}
-                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                        className="form-select"
+                        style={{ fontSize: 12, padding: '4px 8px' }}
                     >
                         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        <option value="claude-haiku-4-5">Haiku 4.5</option>
+
                     </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
@@ -602,7 +606,7 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
             ) : coverage?.error && !summary?.total_workbooks ? (
                 <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }}>
                     {(coverage.error.includes('403') || coverage.error.includes('Forbidden')) ? (
-                        <div className="card" style={{ maxWidth: 560, padding: 28 }}>
+                        <div className="card-elevated" style={{ maxWidth: 560, padding: 28 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                                 <FontAwesomeIcon icon={faLock} style={{ fontSize: 28, color: 'var(--high)', flexShrink: 0 }} />
                                 <div>
@@ -640,7 +644,7 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                             </div>
                         </div>
                     ) : (
-                        <div className="card" style={{ maxWidth: 480, textAlign: 'center', padding: 32 }}>
+                        <div className="card-elevated" style={{ maxWidth: 480, textAlign: 'center', padding: 32 }}>
                             <FontAwesomeIcon icon={faCircleXmark} style={{ fontSize: 32, color: 'var(--critical)', marginBottom: 12 }} />
                             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Could not fetch workbooks</div>
                             <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.6 }}>{coverage.error}</div>
@@ -652,6 +656,21 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                     {/* ── KPI Row ── */}
                     {summary && (
                         <div style={{ padding: '16px 28px', borderBottom: '1px solid var(--border)', background: 'var(--bg-base)', flexShrink: 0 }}>
+                            {/* Overall coverage progress bar */}
+                            <div style={{ marginBottom: 16 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                        Overall Coverage
+                                    </div>
+                                    <div className="card-metric-value" style={{ fontSize: 18, color: 'var(--pwc-orange)' }}>
+                                        {summary.coverage_pct}%
+                                    </div>
+                                </div>
+                                <div className="progress-bar-wrap" style={{ height: 12 }}>
+                                    <div className={`progress-bar-fill ${(summary.coverage_pct || 0) >= 80 ? 'green' : (summary.coverage_pct || 0) >= 50 ? 'orange' : 'red'}`}
+                                         style={{ width: `${summary.coverage_pct || 0}%` }} />
+                                </div>
+                            </div>
                             <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
                                 <ScoreRing pct={summary.coverage_pct} />
                                 <div className="stat-grid" style={{ flex: 1, gridTemplateColumns: 'repeat(5, 1fr)' }}>
@@ -714,6 +733,7 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                     {matrix.map(entry => (
                                         <div key={entry.category}
                                             onClick={() => setExpandedCat(expandedCat === entry.category ? null : entry.category)}
+                                            className="card-elevated"
                                             style={{ background: entry.covered ? PRIORITY_BG[entry.priority] : 'rgba(192,57,43,0.05)', border: `1.5px solid ${entry.covered ? PRIORITY_COLOR[entry.priority] : 'var(--critical)'}`, borderRadius: 10, padding: '14px 16px', cursor: 'pointer', transition: 'all 0.15s' }}
                                             onMouseEnter={e => (e.currentTarget.style.transform = 'translateY(-1px)')}
                                             onMouseLeave={e => (e.currentTarget.style.transform = '')}>
@@ -728,12 +748,19 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                                 <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 12 }}>
                                                     {entry.covered ? (
                                                         <>
-                                                            <div style={{ fontSize: 22, fontWeight: 800, color: PRIORITY_COLOR[entry.priority] }}>{entry.count}</div>
-                                                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>workbook{entry.count !== 1 ? 's' : ''}</div>
+                                                            <div className="card-metric-value" style={{ fontSize: 22, color: PRIORITY_COLOR[entry.priority] }}>{entry.count}</div>
+                                                            <div className="text-muted" style={{ fontSize: 10 }}>workbook{entry.count !== 1 ? 's' : ''}</div>
                                                         </>
                                                     ) : <span className="badge badge-critical" style={{ fontSize: 11 }}>GAP</span>}
                                                 </div>
                                             </div>
+                                            {/* Coverage progress bar for covered entries */}
+                                            {entry.covered && (
+                                                <div className="progress-bar-wrap" style={{ marginBottom: 8, height: 4 }}>
+                                                    <div className={`progress-bar-fill ${entry.stale_count > 0 ? 'orange' : 'green'}`}
+                                                         style={{ width: entry.stale_count === 0 ? '100%' : `${Math.round(((entry.count - entry.stale_count) / entry.count) * 100)}%` }} />
+                                                </div>
+                                            )}
                                             {entry.covered && entry.stale_count > 0 && (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--high)', marginBottom: 8 }}>
                                                     <FontAwesomeIcon icon={faTriangleExclamation} style={{ fontSize: 10 }} />
@@ -751,13 +778,13 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                                                 <FontAwesomeIcon icon={w.stale ? faTriangleExclamation : faCheck} style={{ fontSize: 10, color: w.stale ? 'var(--high)' : 'var(--low)', flexShrink: 0 }} />
                                                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{w.name}</span>
                                                             </div>
-                                                            <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0, marginLeft: 8 }}>{relativeTime(w.last_modified)}</span>
+                                                            <span className="text-muted" style={{ fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{relativeTime(w.last_modified)}</span>
                                                         </div>
                                                     ))}
                                                 </div>
                                             )}
                                             {entry.covered && (
-                                                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                                                <div className="text-muted" style={{ fontSize: 10, marginTop: 4 }}>
                                                     {expandedCat === entry.category ? 'Click to collapse' : 'Click to expand'}
                                                 </div>
                                             )}
@@ -787,12 +814,21 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                 <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
                                     <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
                                         <FontAwesomeIcon icon={faMagnifyingGlass} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
-                                        <input className="input" placeholder="Search workbooks…" value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 30, height: 34 }} />
+                                        <input className="form-input" placeholder="Search workbooks…" value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 30, height: 34 }} />
                                     </div>
-                                    <select className="input" value={catFilter} onChange={e => setCatFilter(e.target.value)} style={{ height: 34, fontSize: 12 }}>
-                                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{filteredWorkbooks.length} of {allWorkbooks.length}</div>
+                                    <div className="text-muted" style={{ fontSize: 12 }}>{filteredWorkbooks.length} of {allWorkbooks.length}</div>
+                                </div>
+                                {/* Category chips */}
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+                                    {categories.map(c => (
+                                        <button
+                                            key={c}
+                                            className={`chip ${catFilter === c ? 'active' : ''}`}
+                                            onClick={() => setCatFilter(c)}
+                                        >
+                                            {c}
+                                        </button>
+                                    ))}
                                 </div>
                                 {filteredWorkbooks.length === 0 ? (
                                     <div className="empty-state">
@@ -818,22 +854,25 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                                         <tr key={i}>
                                                             <td>
                                                                 <div style={{ fontSize: 12, fontWeight: 600 }}>{w.name}</div>
-                                                                {w.description && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 340 }}>{w.description}</div>}
+                                                                {w.description && <div className="text-muted" style={{ fontSize: 10, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 340 }}>{w.description}</div>}
                                                             </td>
                                                             <td><span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{w.category}</span></td>
                                                             <td><span className="badge badge-muted" style={{ fontSize: 10 }}>{w.kind}</span></td>
                                                             <td>
-                                                                {w.stale ? (
-                                                                    <span className="badge badge-high" style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 5, width: 'fit-content' }}>
-                                                                        <FontAwesomeIcon icon={faTriangleExclamation} style={{ fontSize: 9 }} />Stale
-                                                                    </span>
-                                                                ) : (
-                                                                    <span className="badge badge-low" style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 5, width: 'fit-content' }}>
-                                                                        <FontAwesomeIcon icon={faCheck} style={{ fontSize: 9 }} />Current
-                                                                    </span>
-                                                                )}
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                                    <div className={`health-light ${w.stale ? 'yellow' : 'green'}`} />
+                                                                    {w.stale ? (
+                                                                        <span className="badge badge-high" style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 5, width: 'fit-content' }}>
+                                                                            <FontAwesomeIcon icon={faTriangleExclamation} style={{ fontSize: 9 }} />Stale
+                                                                        </span>
+                                                                    ) : (
+                                                                        <span className="badge badge-low" style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 5, width: 'fit-content' }}>
+                                                                            <FontAwesomeIcon icon={faCheck} style={{ fontSize: 9 }} />Current
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                             </td>
-                                                            <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{relativeTime(w.last_modified)}</td>
+                                                            <td className="text-muted" style={{ fontSize: 11 }}>{relativeTime(w.last_modified)}</td>
                                                             <td style={{ fontSize: 11, color: w.stale ? 'var(--high)' : 'var(--text-muted)' }}>
                                                                 {w.days_since_modified !== null ? `${w.days_since_modified}d` : '—'}
                                                             </td>
@@ -864,7 +903,7 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                 </div>
                             ) : (
                                 <div>
-                                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>
+                                    <div className="text-muted" style={{ fontSize: 12, marginBottom: 14 }}>
                                         Workbook creates, updates, and deletes from AzureActivity (last 30 days). Read-only access is not logged by Azure.
                                     </div>
                                     <div className="card" style={{ padding: 0 }}>
@@ -888,9 +927,9 @@ ${gaps.length > 0 ? `<div class="alert">⚠️ <strong>${gaps.length} gap${gaps.
                                                                 <td><span className={`badge ${a.status === 'Success' ? 'badge-low' : 'badge-critical'}`} style={{ fontSize: 10 }}>
                                                                     <FontAwesomeIcon icon={a.status === 'Success' ? faCheck : faXmark} style={{ marginRight: 4, fontSize: 9 }} />{a.status}
                                                                 </span></td>
-                                                                <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{a.caller || '—'}</td>
+                                                                <td className="text-muted" style={{ fontSize: 11 }}>{a.caller || '—'}</td>
                                                                 <td style={{ fontSize: 12, fontWeight: 600 }}>{a.count}</td>
-                                                                <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{relativeTime(a.last_seen)}</td>
+                                                                <td className="text-muted" style={{ fontSize: 11 }}>{relativeTime(a.last_seen)}</td>
                                                             </tr>
                                                         );
                                                     })}

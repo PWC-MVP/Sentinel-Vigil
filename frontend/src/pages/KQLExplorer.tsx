@@ -274,7 +274,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
                     </div>
 
                     <textarea
-                        className="input"
+                        className="form-input"
                         value={prompt}
                         onChange={e => setPrompt(e.target.value)}
                         placeholder="e.g. Show me all failed sign-ins from outside the UK in the last 7 days, grouped by user and IP address…"
@@ -289,9 +289,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
                             Try:
                         </span>
                         {EXAMPLE_PROMPTS.map(p => (
-                            <button key={p} className="btn btn-ghost btn-sm"
-                                style={{ fontSize: 11, padding: '3px 10px', borderRadius: 20, border: '1px solid var(--border)', lineHeight: 1.4 }}
-                                onClick={() => setPrompt(p)}>{p}</button>
+                            <button key={p} className="chip" onClick={() => setPrompt(p)}>{p}</button>
                         ))}
                     </div>
 
@@ -303,7 +301,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
                         </button>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Look-back:</span>
-                            <select className="input" value={days} onChange={e => setDays(e.target.value)}
+                            <select className="form-select" value={days} onChange={e => setDays(e.target.value)}
                                 style={{ height: 34, fontSize: 12, width: 110 }}>
                                 <option value="1">1 day</option>
                                 <option value="7">7 days</option>
@@ -322,7 +320,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
                                 <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--critical)', marginBottom: 2 }}>Generation failed</div>
                                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{genError}</div>
                             </div>
-                            <button onClick={() => setGenError(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', flexShrink: 0 }}>
+                            <button onClick={() => setGenError(null)} className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto', flexShrink: 0, padding: '2px 6px' }}>
                                 <FontAwesomeIcon icon={faXmark} />
                             </button>
                         </div>
@@ -337,7 +335,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
                                 <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-primary)' }}>
                                     Generated Query
                                 </span>
-                                <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--low)', background: 'rgba(39,174,96,0.1)', padding: '2px 8px', borderRadius: 10 }}>
+                                <span className="badge badge-low" style={{ fontSize: 10 }}>
                                     Editable — review before running
                                 </span>
                             </div>
@@ -359,11 +357,11 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
 
                         <textarea
                             ref={queryRef}
-                            className="input"
+                            className="form-textarea mono"
                             value={query}
                             onChange={e => setQuery(e.target.value)}
                             rows={12}
-                            style={{ width: '100%', resize: 'vertical', boxSizing: 'border-box', fontFamily: '"JetBrains Mono", Consolas, "Courier New", monospace', fontSize: 12, lineHeight: 1.7, marginBottom: 12, background: 'var(--bg-deep, var(--bg-surface))', color: 'var(--code-color, var(--text-primary))' }}
+                            style={{ width: '100%', resize: 'vertical', boxSizing: 'border-box', fontSize: 12, lineHeight: 1.7, marginBottom: 12, background: 'var(--bg-deep, var(--bg-surface))', color: 'var(--code-color, var(--text-primary))' }}
                             onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); smartRunQuery(); } }}
                         />
 
@@ -398,11 +396,7 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
 
                         {/* Terminal header */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', borderBottom: '1px solid #1a2333', background: '#080c12' }}>
-                            <div style={{
-                                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                                background: smartRunning ? '#22c55e' : (runSuccess === false ? '#f87171' : '#22c55e'),
-                                color: smartRunning ? '#22c55e' : (runSuccess === false ? '#f87171' : '#22c55e'),
-                            }} className={smartRunning ? 'engine-dot-active' : ''} />
+                            <div className={`health-light ${smartRunning ? 'green pulse' : (runSuccess === false ? 'red' : 'green')}`} />
                             <FontAwesomeIcon icon={faTerminal} style={{ color: '#334155', fontSize: 10 }} />
                             <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#475569', fontFamily: '"JetBrains Mono", monospace' }}>
                                 Smart Query Engine
@@ -509,27 +503,28 @@ ${explanation ? `<div class="intent"><strong>Query intent</strong>${esc(explanat
 
                 {/* ── Results ── */}
                 {result && (
-                    <div className="card fade-in">
+                    <div className="card-elevated fade-in">
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                                <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-primary)' }}>Results</span>
-                                <span style={{ fontSize: 13, fontWeight: 700, color: result.row_count > 0 ? 'var(--info)' : 'var(--text-muted)' }}>
-                                    {result.row_count.toLocaleString()} row{result.row_count !== 1 ? 's' : ''}
-                                </span>
+                                <div className="chart-title" style={{ margin: 0 }}>Query Results</div>
                                 {elapsed !== null && (
-                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{elapsed}ms</span>
+                                    <span className="badge badge-muted" style={{ fontSize: 10 }}>{elapsed}ms</span>
                                 )}
                             </div>
-                            {result.row_count > 0 && (
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                    <button className="btn btn-ghost btn-sm" onClick={exportHTML} style={{ fontSize: 11 }}>
-                                        <FontAwesomeIcon icon={faFileCode} style={{ marginRight: 6 }} />Export HTML
-                                    </button>
-                                    <button className="btn btn-ghost btn-sm" onClick={exportCSV} style={{ fontSize: 11 }}>
-                                        <FontAwesomeIcon icon={faTable} style={{ marginRight: 6 }} />Export CSV
-                                    </button>
-                                </div>
-                            )}
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                <span className="badge badge-info">{result.row_count.toLocaleString()} rows</span>
+                                <span className="badge badge-muted">{(result.columns || []).length} cols</span>
+                                {result.row_count > 0 && (
+                                    <>
+                                        <button className="btn btn-ghost btn-sm" onClick={exportHTML} style={{ fontSize: 11 }}>
+                                            <FontAwesomeIcon icon={faFileCode} style={{ marginRight: 6 }} />Export HTML
+                                        </button>
+                                        <button className="btn btn-ghost btn-sm" onClick={exportCSV} style={{ fontSize: 11 }}>
+                                            <FontAwesomeIcon icon={faTable} style={{ marginRight: 6 }} />Export CSV
+                                        </button>
+                                    </>
+                                )}
+                            </div>
                         </div>
 
                         {result.row_count === 0 ? (

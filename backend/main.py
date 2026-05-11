@@ -16,6 +16,7 @@ from backend.routers import kql, investigations, reports, enrichment, chat, mitr
 from backend.routers import sentinel_health, automation, analytics_rules, incident_analytics, entity_exposure, hunting, workbooks
 from backend.routers import backup as backup_router_mod, restore as restore_router_mod
 from backend.routers import dcr
+from backend.routers import threat_feed
 
 
 # ── Scheduled daily backup (02:00 UTC) ───────────────────────────────────────
@@ -82,6 +83,7 @@ app.include_router(workbooks.router)
 app.include_router(backup_router_mod.router)
 app.include_router(restore_router_mod.router)
 app.include_router(dcr.router)
+app.include_router(threat_feed.router)
 
 
 # ── System endpoints ──────────────────────────────────────────────────────────

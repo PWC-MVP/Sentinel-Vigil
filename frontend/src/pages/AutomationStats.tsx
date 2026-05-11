@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { http as axios } from '../api/client';
+import { PieChart, Pie, Cell, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { ReportLogPanel, type LogStep } from '../components/ReportLogPanel';
 import {
@@ -156,10 +157,12 @@ function AiReportPanel({ days }: { days: number }) {
                         value={model}
                         onChange={e => setModel(e.target.value)}
                         disabled={loading}
-                        style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
+                        className="form-select"
+                        style={{ fontSize: 12, padding: '4px 8px' }}
                     >
                         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        <option value="claude-haiku-4-5">Haiku 4.5</option>
+
                     </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
@@ -494,28 +497,28 @@ export default function AutomationStats() {
                     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
                         {/* ── KPI Row ── */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16 }}>
+                        <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--brand)' }}>
                                 <div className="stat-tile-label">Playbook Runs</div>
                                 <div className="stat-tile-value">{(overview?.playbook_runs ?? 0).toLocaleString()}</div>
-                                <div className="text-xs text-muted">{overview?.playbook_failed} failed</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>{overview?.playbook_failed} failed</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: `3px solid ${(overview?.success_rate ?? 0) > 90 ? 'var(--low)' : 'var(--high)'}` }}>
                                 <div className="stat-tile-label">Playbook Success Rate</div>
                                 <div className="stat-tile-value" style={{ color: (overview?.success_rate ?? 0) > 90 ? 'var(--low)' : 'var(--high)' }}>
                                     {overview?.success_rate ?? 0}%
                                 </div>
-                                <div className="text-xs text-muted">{overview?.playbook_success} succeeded</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>{overview?.playbook_success} succeeded</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--low)' }}>
                                 <div className="stat-tile-label">True Positives</div>
                                 <div className="stat-tile-value" style={{ color: 'var(--low)' }}>{overview?.true_positive ?? 0}</div>
-                                <div className="text-xs text-muted">of {overview?.incident_total ?? 0} total incidents</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>of {overview?.incident_total ?? 0} total incidents</div>
                             </div>
                             <div className="stat-tile" style={{ borderTop: '3px solid var(--critical)' }}>
                                 <div className="stat-tile-label">False Positives</div>
                                 <div className="stat-tile-value" style={{ color: 'var(--critical)' }}>{overview?.false_positive ?? 0}</div>
-                                <div className="text-xs text-muted">Tuning opportunities</div>
+                                <div className="text-muted" style={{ fontSize: 11 }}>Tuning opportunities</div>
                             </div>
                         </div>
 
@@ -533,7 +536,90 @@ export default function AutomationStats() {
 
                         {/* ── Overview ── */}
                         {tab === 'overview' && (
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                                {/* Playbook Success Rate Donut */}
+                                {overview && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Playbook Success Rate</div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+                                            <div style={{ position: 'relative', width: 160, height: 160, flexShrink: 0 }}>
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <PieChart>
+                                                        <Pie
+                                                            data={[
+                                                                { name: 'Succeeded', value: overview.playbook_success || 0 },
+                                                                { name: 'Failed',    value: overview.playbook_failed || 0 },
+                                                            ]}
+                                                            cx="50%" cy="50%"
+                                                            innerRadius={48} outerRadius={70}
+                                                            dataKey="value" paddingAngle={4}
+                                                            startAngle={90} endAngle={-270}
+                                                        >
+                                                            <Cell fill="#27AE60" />
+                                                            <Cell fill="#C0392B" />
+                                                        </Pie>
+                                                        <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    </PieChart>
+                                                </ResponsiveContainer>
+                                                <div style={{
+                                                    position: 'absolute', inset: 0,
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    flexDirection: 'column', pointerEvents: 'none',
+                                                }}>
+                                                    <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--low)' }}>
+                                                        {overview.success_rate != null ? `${Number(overview.success_rate).toFixed(0)}%` : '–'}
+                                                    </div>
+                                                    <div style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>Success</div>
+                                                </div>
+                                            </div>
+                                            <div style={{ flex: 1 }}>
+                                                {[
+                                                    { label: 'Total Runs',  value: overview.playbook_runs,     color: 'var(--pwc-orange)' },
+                                                    { label: 'Succeeded',   value: overview.playbook_success,  color: 'var(--low)' },
+                                                    { label: 'Failed',      value: overview.playbook_failed,   color: 'var(--critical)' },
+                                                ].map(r => (
+                                                    <div key={r.label} className="kv-row">
+                                                        <div className="kv-label">{r.label}</div>
+                                                        <div className="kv-value" style={{ color: r.color }}>{r.value ?? '—'}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                                {/* Daily Incident Activity AreaChart */}
+                                {dailyTrend.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Daily Incident Activity</div>
+                                        <div className="chart-container chart-container-md">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <AreaChart data={dailyTrend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                                    <defs>
+                                                        <linearGradient id="gradCreated" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#2980B9" stopOpacity={0.2} />
+                                                            <stop offset="95%" stopColor="#2980B9" stopOpacity={0} />
+                                                        </linearGradient>
+                                                        <linearGradient id="gradClosed" x1="0" y1="0" x2="0" y2="1">
+                                                            <stop offset="5%" stopColor="#27AE60" stopOpacity={0.2} />
+                                                            <stop offset="95%" stopColor="#27AE60" stopOpacity={0} />
+                                                        </linearGradient>
+                                                    </defs>
+                                                    <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                           tickFormatter={(d: string) => d.slice(5)} />
+                                                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                                                    <Area type="monotone" dataKey="created" name="Created" stroke="#2980B9"
+                                                          fill="url(#gradCreated)" strokeWidth={2} dot={false} />
+                                                    <Area type="monotone" dataKey="closed"  name="Closed"  stroke="#27AE60"
+                                                          fill="url(#gradClosed)"  strokeWidth={2} dot={false} />
+                                                </AreaChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="viz-grid-2">
                                 <div className="card">
                                     <div className="card-title">
                                         <FontAwesomeIcon icon={faChartPie} className="card-title-icon" />
@@ -547,10 +633,10 @@ export default function AutomationStats() {
                                                 <div key={c.label}>
                                                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
                                                         <span style={{ fontWeight: 600, color }}>{c.label}</span>
-                                                        <span style={{ color: 'var(--text-muted)' }}>{c.count} ({pct.toFixed(1)}%)</span>
+                                                        <span className="text-muted">{c.count} ({pct.toFixed(1)}%)</span>
                                                     </div>
-                                                    <div style={{ height: 10, background: '#f5f5f5', borderRadius: 5 }}>
-                                                        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 5, transition: 'width 0.5s ease' }} />
+                                                    <div className="progress-bar-wrap">
+                                                        <div className="progress-bar-fill orange" style={{ width: `${pct}%`, background: color }} />
                                                     </div>
                                                 </div>
                                             );
@@ -567,12 +653,12 @@ export default function AutomationStats() {
                                         <div className="empty-state"><div className="empty-state-text">No trend data</div></div>
                                     ) : (
                                         <div>
-                                            <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                                                    <div style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--brand)' }} />Created
+                                            <div className="chart-legend" style={{ marginBottom: 12 }}>
+                                                <div className="chart-legend-item">
+                                                    <div className="chart-legend-dot" style={{ background: 'var(--brand)' }} />Created
                                                 </div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                                                    <div style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--low)' }} />Closed
+                                                <div className="chart-legend-item">
+                                                    <div className="chart-legend-dot" style={{ background: 'var(--low)' }} />Closed
                                                 </div>
                                             </div>
                                             <div style={{ height: 160, display: 'flex', alignItems: 'flex-end', gap: 3, paddingBottom: 6 }}>
@@ -591,6 +677,7 @@ export default function AutomationStats() {
                                     )}
                                 </div>
                             </div>
+                            </div>
                         )}
 
                         {/* ── Logic Apps ── */}
@@ -602,7 +689,7 @@ export default function AutomationStats() {
                                         Management API unavailable: {logicApps.mgmt_error} — showing run history only
                                     </div>
                                 )}
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 14 }}>
+                                <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
                                     {[
                                         { label: 'Total Logic Apps',   value: logicApps?.total_count ?? '—',   color: 'var(--text-primary)' },
                                         { label: 'Enabled',            value: logicApps?.enabled_count ?? '—',  color: 'var(--low)' },
@@ -614,6 +701,41 @@ export default function AutomationStats() {
                                         </div>
                                     ))}
                                 </div>
+                                {/* Logic Apps Health Card Grid */}
+                                {logicApps?.logic_apps && logicApps.logic_apps.length > 0 && (
+                                    <>
+                                        <div className="chart-title">Logic Apps Health</div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12, marginBottom: 20 }}>
+                                            {logicApps.logic_apps.slice(0, 12).map((app: any) => (
+                                                <div key={app.name} className="card-elevated" style={{
+                                                    padding: '14px 16px',
+                                                    borderTop: `3px solid ${app.state === 'Enabled' ? 'var(--low)' : 'var(--critical)'}`,
+                                                }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                                                        <div style={{ fontWeight: 700, fontSize: 12, color: 'var(--text-primary)',
+                                                                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                                      maxWidth: 160 }} title={app.name}>
+                                                            {app.name}
+                                                        </div>
+                                                        <div className={`health-light ${app.state === 'Enabled' ? 'green pulse' : 'red'}`} />
+                                                    </div>
+                                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>{app.trigger_type}</div>
+                                                    {app.success_rate != null && (
+                                                        <>
+                                                            <div className="progress-bar-wrap" style={{ marginBottom: 4 }}>
+                                                                <div className={`progress-bar-fill ${(app.success_rate ?? 0) >= 90 ? 'green' : 'red'}`}
+                                                                     style={{ width: `${Math.min(100, app.success_rate ?? 0)}%` }} />
+                                                            </div>
+                                                            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                                                                {app.succeeded}/{app.total_runs} runs · {Number(app.success_rate).toFixed(0)}%
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </>
+                                )}
                                 <div className="card" style={{ padding: 0 }}>
                                     <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)' }}>
                                         <div className="card-title" style={{ margin: 0 }}>
@@ -678,7 +800,7 @@ export default function AutomationStats() {
                         {/* ── Automation Rules ── */}
                         {tab === 'rules' && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
+                                <div className="stat-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)' }}>
                                     {[
                                         { label: 'Total Rules',          value: autoRules?.total ?? '—',          color: 'var(--text-primary)' },
                                         { label: 'Enabled',              value: autoRules?.enabled_count ?? '—',  color: 'var(--low)' },
@@ -793,8 +915,9 @@ export default function AutomationStats() {
                                                             </span>
                                                         </td>
                                                         <td style={{ width: 150 }}>
-                                                            <div style={{ height: 8, background: '#f0f0f0', borderRadius: 4, overflow: 'hidden' }}>
-                                                                <div style={{ width: `${(p.total_runs / maxRuns) * 100}%`, height: '100%', background: p.success_rate >= 90 ? 'var(--low)' : 'var(--high)', borderRadius: 4 }} />
+                                                            <div className="progress-bar-wrap">
+                                                                <div className={`progress-bar-fill ${p.success_rate >= 90 ? 'green' : 'orange'}`}
+                                                                     style={{ width: `${(p.total_runs / maxRuns) * 100}%` }} />
                                                             </div>
                                                         </td>
                                                         <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>
@@ -812,7 +935,31 @@ export default function AutomationStats() {
                         {/* ── Failures ── */}
                         {tab === 'failures' && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                                {/* Top Failure Reasons BarChart */}
+                                {failures?.failure_reasons && failures.failure_reasons.length > 0 && (
+                                    <div className="card" style={{ marginBottom: 0 }}>
+                                        <div className="chart-title">Top Failure Reasons</div>
+                                        <div className="chart-container chart-container-md">
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart
+                                                    data={failures.failure_reasons.slice(0, 8).map((r: any) => ({
+                                                        code: (r.error_code || 'Unknown').slice(0, 24),
+                                                        count: r.count,
+                                                    }))}
+                                                    layout="vertical"
+                                                    margin={{ top: 0, right: 20, left: 130, bottom: 0 }}
+                                                >
+                                                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F0F0F0" />
+                                                    <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                    <YAxis dataKey="code" type="category" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={130} />
+                                                    <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                    <Bar dataKey="count" name="Occurrences" fill="#C0392B" radius={[0, 4, 4, 0]} />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    </div>
+                                )}
+                                <div className="viz-grid-2">
                                     {/* Top failing playbooks */}
                                     <div className="card">
                                         <div className="card-title">
@@ -880,13 +1027,13 @@ export default function AutomationStats() {
                                             <FontAwesomeIcon icon={faChartPie} className="card-title-icon" />
                                             Daily Run vs Failure Trend
                                         </div>
-                                        <div style={{ display: 'flex', gap: 16, marginBottom: 12 }}>
+                                        <div className="chart-legend" style={{ marginBottom: 12 }}>
                                             {[
                                                 { color: 'var(--low)', label: 'Succeeded' },
                                                 { color: 'var(--critical)', label: 'Failed' },
                                             ].map(l => (
-                                                <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                                                    <div style={{ width: 10, height: 10, borderRadius: 2, background: l.color }} />{l.label}
+                                                <div key={l.label} className="chart-legend-item">
+                                                    <div className="chart-legend-dot" style={{ background: l.color }} />{l.label}
                                                 </div>
                                             ))}
                                         </div>
@@ -912,7 +1059,7 @@ export default function AutomationStats() {
 
                         {/* ── Outcomes ── */}
                         {tab === 'outcomes' && (
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                            <div className="viz-grid-2">
                                 <div className="card">
                                     <div className="card-title">
                                         <FontAwesomeIcon icon={faCircleCheck} className="card-title-icon" style={{ color: 'var(--low)' }} />
@@ -932,7 +1079,7 @@ export default function AutomationStats() {
                                                                 <span style={{ fontWeight: 600 }}>{c.label}</span>
                                                             </td>
                                                             <td style={{ fontWeight: 700 }}>{c.count.toLocaleString()}</td>
-                                                            <td style={{ color: 'var(--text-muted)' }}>{pct}%</td>
+                                                            <td className="text-muted">{pct}%</td>
                                                         </tr>
                                                     );
                                                 })}
@@ -951,12 +1098,12 @@ export default function AutomationStats() {
                                             { label: 'False Positive Rate', val: totalClass > 0 ? ((overview?.false_positive ?? 0) / totalClass * 100).toFixed(1) : '0.0', target: '< 20%', color: 'var(--critical)' },
                                             { label: 'Playbook Success Rate', val: String(overview?.success_rate ?? 0), target: '> 95%', color: (overview?.success_rate ?? 0) >= 95 ? 'var(--low)' : 'var(--high)' },
                                         ].map(item => (
-                                            <div key={item.label} style={{ padding: '12px 14px', background: 'var(--bg-base)', borderRadius: 8, border: '1px solid var(--border-color)' }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                            <div key={item.label} className="card-metric" style={{ padding: '12px 14px' }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                                                     <span style={{ fontSize: 12, fontWeight: 600 }}>{item.label}</span>
-                                                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Target: {item.target}</span>
+                                                    <span className="text-muted" style={{ fontSize: 11 }}>Target: {item.target}</span>
                                                 </div>
-                                                <div style={{ fontSize: 22, fontWeight: 800, color: item.color }}>{item.val}%</div>
+                                                <div className="card-metric-value" style={{ color: item.color, fontSize: 22 }}>{item.val}%</div>
                                             </div>
                                         ))}
                                     </div>
@@ -1004,10 +1151,11 @@ export default function AutomationStats() {
                                                             <td>{r.auto_labeled.toLocaleString()}</td>
                                                             <td style={{ width: 180 }}>
                                                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                                                    <div style={{ flex: 1, height: 8, background: '#f0f0f0', borderRadius: 4 }}>
-                                                                        <div style={{ width: `${assignRate}%`, height: '100%', background: assignRate >= 80 ? 'var(--low)' : 'var(--high)', borderRadius: 4 }} />
+                                                                    <div className="progress-bar-wrap" style={{ flex: 1, marginBottom: 0 }}>
+                                                                        <div className={`progress-bar-fill ${assignRate >= 80 ? 'green' : 'orange'}`}
+                                                                             style={{ width: `${assignRate}%` }} />
                                                                     </div>
-                                                                    <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 32 }}>{assignRate}%</span>
+                                                                    <span className="text-muted" style={{ fontSize: 11, minWidth: 32 }}>{assignRate}%</span>
                                                                 </div>
                                                             </td>
                                                         </tr>

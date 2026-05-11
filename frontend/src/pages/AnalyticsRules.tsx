@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { http as axios } from '../api/client';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import {
     faListCheck, faChartBar, faShieldHalved, faTriangleExclamation,
     faSearch, faBellSlash, faFilePdf, faFileCode, faRefresh,
@@ -47,6 +48,14 @@ function sevBadge(s: string) {
     if (s === 'Low') return 'badge-low';
     return 'badge-muted';
 }
+function ruleFreshness(lastFired: string | null): 'green' | 'yellow' | 'red' {
+    if (!lastFired) return 'red';
+    const hrs = (Date.now() - new Date(lastFired).getTime()) / 3600000;
+    if (hrs < 24) return 'green';
+    if (hrs < 168) return 'yellow';
+    return 'red';
+}
+
 function isoToHuman(iso: string): string {
     if (!iso) return '—';
     const h = iso.match(/(\d+)H/)?.[1];
@@ -306,16 +315,11 @@ function RuleDetailPanel({ rule, days, onClose }: PanelProps) {
                 </div>
 
                 {/* Tabs */}
-                <div style={{ display: 'flex', gap: 4, marginTop: 12 }}>
+                <div className="tabs" style={{ marginTop: 12, marginBottom: 0, gap: 4 }}>
                     {(['properties', 'tune'] as const).map(t => (
                         <button key={t} onClick={() => setDetailTab(t)}
-                            style={{
-                                padding: '5px 12px', fontSize: 11, fontWeight: 600,
-                                cursor: 'pointer', borderRadius: 6, transition: 'all 0.15s',
-                                background: detailTab === t ? 'var(--brand)' : 'var(--bg-surface)',
-                                color: detailTab === t ? '#fff' : 'var(--text-muted)',
-                                border: detailTab === t ? 'none' : '1px solid var(--border-color)',
-                            }}>
+                            className={`tab ${detailTab === t ? 'active' : ''}`}
+                            style={{ borderRadius: 6 }}>
                             {t === 'properties' ? (
                                 <><FontAwesomeIcon icon={faCode} style={{ marginRight: 5 }} />Properties</>
                             ) : (
@@ -619,11 +623,11 @@ function AiReportPanel({ days }: { days: number }) {
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     {report && (
                         <>
-                            <button className="btn btn-sm btn-ghost" onClick={() => doExport('html')}>
+                            <button className="btn btn-secondary btn-sm" onClick={() => doExport('html')}>
                                 <FontAwesomeIcon icon={faFileCode} style={{ color: 'var(--info)' }} /> HTML
                             </button>
-                            <button className="btn btn-sm btn-ghost" onClick={() => doExport('pdf')}>
-                                <FontAwesomeIcon icon={faFilePdf} style={{ color: 'var(--critical)' }} /> PDF
+                            <button className="btn btn-primary btn-sm" onClick={() => doExport('pdf')}>
+                                <FontAwesomeIcon icon={faFilePdf} /> PDF
                             </button>
                             <button className="btn btn-sm btn-ghost" onClick={() => setExpanded(v => !v)}>
                                 <FontAwesomeIcon icon={expanded ? faChevronUp : faChevronDown} />
@@ -637,7 +641,8 @@ function AiReportPanel({ days }: { days: number }) {
                         style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-card)', color: 'var(--text-primary)', cursor: 'pointer' }}
                     >
                         <option value="claude-sonnet-4-6">Sonnet 4.6</option>
-                        <option value="claude-haiku-4-5-20251001">Haiku 4.5</option>
+                        <option value="claude-haiku-4-5">Haiku 4.5</option>
+
                     </select>
                     <button className="btn btn-sm btn-primary" onClick={generate} disabled={loading}>
                         <FontAwesomeIcon icon={faRobot} spin={loading} style={{ marginRight: 6 }} />
@@ -788,11 +793,11 @@ export default function AnalyticsRules() {
                         <div className="page-subtitle">Detection rule coverage, alert volume, MITRE tactic distribution, and silent rules</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button className="btn btn-sm btn-ghost" onClick={() => handleExport('html')} disabled={isExporting || loading}>
+                        <button className="btn btn-secondary btn-sm" onClick={() => handleExport('html')} disabled={isExporting || loading}>
                             <FontAwesomeIcon icon={faFileCode} style={{ color: 'var(--info)' }} /> HTML
                         </button>
-                        <button className="btn btn-sm btn-ghost" onClick={() => handleExport('pdf')} disabled={isExporting || loading}>
-                            <FontAwesomeIcon icon={faFilePdf} style={{ color: 'var(--critical)' }} /> PDF
+                        <button className="btn btn-primary btn-sm" onClick={() => handleExport('pdf')} disabled={isExporting || loading}>
+                            <FontAwesomeIcon icon={faFilePdf} /> PDF
                         </button>
                         <button className="btn btn-sm btn-ghost" onClick={fetchData} disabled={loading}>
                             <FontAwesomeIcon icon={faRefresh} spin={loading} /> Refresh
@@ -863,6 +868,28 @@ export default function AnalyticsRules() {
 
                         {/* Rule Activity — split layout when a rule is selected */}
                         {tab === 'activity' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            {trend && trend.length > 0 && (
+                                <div className="card" style={{ marginBottom: 0 }}>
+                                    <div className="chart-title">Alert Trend by Severity</div>
+                                    <div className="chart-container chart-container-md">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <LineChart data={trend} margin={{ top: 4, right: 16, left: -10, bottom: 0 }}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#F0F0F0" vertical={false} />
+                                                <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                                       tickFormatter={(d: string) => d.slice(5)} />
+                                                <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                                                <Line type="monotone" dataKey="High"          stroke="#E67E22" strokeWidth={2} dot={false} />
+                                                <Line type="monotone" dataKey="Medium"        stroke="#D4AC0D" strokeWidth={2} dot={false} />
+                                                <Line type="monotone" dataKey="Low"           stroke="#27AE60" strokeWidth={2} dot={false} />
+                                                <Line type="monotone" dataKey="Informational" stroke="#2980B9" strokeWidth={2} dot={false} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+                            )}
                             <div style={{ display: 'grid', gridTemplateColumns: selectedRule ? '1fr 400px' : '1fr', gap: 16, alignItems: 'start' }}>
                                 {/* Rules table */}
                                 <div className="card" style={{ padding: 0 }}>
@@ -870,13 +897,13 @@ export default function AnalyticsRules() {
                                         <div style={{ position: 'relative', flex: 1, minWidth: 180 }}>
                                             <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 12 }} />
                                             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search rules…"
-                                                style={{ width: '100%', paddingLeft: 30, paddingRight: 10, padding: '7px 10px 7px 28px', border: '1px solid var(--border-color)', borderRadius: 6, fontSize: 12, background: 'var(--bg-input)', color: 'var(--text-primary)', boxSizing: 'border-box' }} />
+                                                className="form-input"
+                                                style={{ width: '100%', paddingLeft: 30, paddingRight: 10, boxSizing: 'border-box' }} />
                                         </div>
                                         <div style={{ display: 'flex', gap: 6 }}>
                                             {(['All', 'High', 'Medium', 'Low', 'Informational'] as const).map(s => (
                                                 <button key={s} onClick={() => setSevFilter(s)}
-                                                    className={`btn btn-sm ${sevFilter === s ? 'btn-primary' : 'btn-ghost'}`}
-                                                    style={{ borderRadius: 6, fontSize: 11, padding: '4px 10px' }}>
+                                                    className={`chip ${sevFilter === s ? 'active' : ''}`}>
                                                     {s}
                                                 </button>
                                             ))}
@@ -913,7 +940,12 @@ export default function AnalyticsRules() {
                                                             <td style={{ padding: '8px 4px 8px 8px', width: 20 }}>
                                                                 <FontAwesomeIcon icon={faChevronRight} style={{ fontSize: 9, color: isSelected ? 'var(--brand)' : 'var(--text-muted)', opacity: isSelected ? 1 : 0.4, transform: isSelected ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
                                                             </td>
-                                                            <td style={{ fontWeight: 600, fontSize: 12 }}>{r.name}</td>
+                                                            <td style={{ fontWeight: 600, fontSize: 12 }}>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                                    <div className={`health-light ${ruleFreshness(r.last_fired)}`} />
+                                                                    <span>{r.name}</span>
+                                                                </div>
+                                                            </td>
                                                             <td><span className={`badge ${sevBadge(r.severity)}`}>{r.severity}</span></td>
                                                             <td style={{ fontWeight: 700, color: sevColor(r.severity) }}>{r.alert_count.toLocaleString()}</td>
                                                             <td style={{ color: 'var(--text-muted)' }}>{r.linked_incidents.toLocaleString()}</td>
@@ -953,10 +985,38 @@ export default function AnalyticsRules() {
                                     />
                                 )}
                             </div>
+                            </div>
                         )}
 
                         {/* MITRE Tactics */}
                         {tab === 'tactic' && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                            {tactics && tactics.length > 0 && (
+                                <div className="card" style={{ marginBottom: 0 }}>
+                                    <div className="chart-title">Alert Volume by MITRE Tactic</div>
+                                    <div className="chart-container chart-container-lg">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart
+                                                data={tactics.slice(0, 12).map((t: TacticRow) => ({
+                                                    name: (t.tactic || '').slice(0, 20),
+                                                    alerts: t.alert_count,
+                                                    rules: t.unique_rules,
+                                                }))}
+                                                layout="vertical"
+                                                margin={{ top: 0, right: 20, left: 130, bottom: 0 }}
+                                            >
+                                                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F0F0F0" />
+                                                <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                                                <YAxis dataKey="name" type="category" tick={{ fontSize: 10, fill: 'var(--text-muted)' }} width={130} />
+                                                <Tooltip contentStyle={{ fontFamily: 'Inter', fontSize: 12, borderRadius: 8 }} />
+                                                <Legend iconSize={8} wrapperStyle={{ fontSize: 11 }} />
+                                                <Bar dataKey="alerts" name="Alerts"       fill="#C0392B" radius={[0, 2, 2, 0]} />
+                                                <Bar dataKey="rules"  name="Unique Rules" fill="#2980B9" radius={[0, 2, 2, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+                            )}
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: 20 }}>
                                 <div className="card" style={{ padding: 0 }}>
                                     <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
@@ -1010,6 +1070,7 @@ export default function AnalyticsRules() {
                                         );
                                     })}
                                 </div>
+                            </div>
                             </div>
                         )}
 
@@ -1067,53 +1128,58 @@ export default function AnalyticsRules() {
 
                         {/* Silent Rules */}
                         {tab === 'silent' && (
-                            <div className="card" style={{ padding: 0 }}>
-                                <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center' }}>
-                                    <div className="card-title" style={{ margin: 0 }}>
-                                        <FontAwesomeIcon icon={faBellSlash} className="card-title-icon" style={{ color: 'var(--high)' }} />
-                                        Silent Detection Rules
-                                    </div>
-                                    <div style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
-                                        Rules that fired previously but not in the last {days} days
-                                    </div>
-                                </div>
+                            <div>
                                 {silentRules.length === 0 ? (
-                                    <div className="empty-state" style={{ padding: 60 }}>
-                                        <div className="empty-state-icon"><FontAwesomeIcon icon={faListCheck} style={{ color: 'var(--low)', opacity: 0.6 }} /></div>
-                                        <div className="empty-state-text">All rules appear active — no silent detections found</div>
+                                    <div className="card">
+                                        <div className="empty-state" style={{ padding: 60 }}>
+                                            <div className="empty-state-icon"><FontAwesomeIcon icon={faListCheck} style={{ color: 'var(--low)', opacity: 0.6 }} /></div>
+                                            <div className="empty-state-text">All rules appear active — no silent detections found</div>
+                                        </div>
                                     </div>
                                 ) : (
-                                    <div className="data-table-wrap">
-                                        <table className="data-table">
-                                            <thead>
-                                                <tr>
-                                                    <th>Rule Name</th>
-                                                    <th style={{ width: 100 }}>Severity</th>
-                                                    <th style={{ width: 100 }}>Total Alerts</th>
-                                                    <th style={{ width: 160 }}>Last Fired</th>
-                                                    <th>Days Silent</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {silentRules.map((r, i) => {
-                                                    const lastDate = r.last_fired ? new Date(r.last_fired) : null;
-                                                    const daysSilent = lastDate ? Math.floor((Date.now() - lastDate.getTime()) / 86400000) : null;
-                                                    return (
-                                                        <tr key={i}>
-                                                            <td style={{ fontWeight: 600, fontSize: 12 }}>{r.name}</td>
-                                                            <td><span className={`badge ${sevBadge(r.severity)}`}>{r.severity}</span></td>
-                                                            <td>{r.total_alerts.toLocaleString()}</td>
-                                                            <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{lastDate?.toLocaleDateString() ?? '—'}</td>
-                                                            <td>
-                                                                <span className={`badge ${daysSilent && daysSilent > 60 ? 'badge-critical' : 'badge-high'}`}>
-                                                                    {daysSilent !== null ? `${daysSilent}d` : '—'}
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
+                                    <div className="card" style={{ borderLeft: '3px solid var(--critical)', padding: 0 }}>
+                                        <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', gap: 12, alignItems: 'center' }}>
+                                            <div className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <FontAwesomeIcon icon={faBellSlash} className="card-title-icon" style={{ color: 'var(--high)' }} />
+                                                Silent Rules
+                                                <span className="badge badge-critical">{silentRules.length}</span>
+                                            </div>
+                                            <div style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>
+                                                These rules have fired no alerts in the selected period and may need review.
+                                            </div>
+                                        </div>
+                                        <div className="data-table-wrap">
+                                            <table className="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Rule Name</th>
+                                                        <th style={{ width: 100 }}>Severity</th>
+                                                        <th style={{ width: 100 }}>Total Alerts</th>
+                                                        <th style={{ width: 160 }}>Last Fired</th>
+                                                        <th>Days Silent</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {silentRules.map((r, i) => {
+                                                        const lastDate = r.last_fired ? new Date(r.last_fired) : null;
+                                                        const daysSilent = lastDate ? Math.floor((Date.now() - lastDate.getTime()) / 86400000) : null;
+                                                        return (
+                                                            <tr key={i}>
+                                                                <td style={{ fontWeight: 600, fontSize: 12 }}>{r.name}</td>
+                                                                <td><span className={`badge ${sevBadge(r.severity)}`}>{r.severity}</span></td>
+                                                                <td>{r.total_alerts.toLocaleString()}</td>
+                                                                <td style={{ fontSize: 11, color: 'var(--text-muted)' }}>{lastDate?.toLocaleDateString() ?? '—'}</td>
+                                                                <td>
+                                                                    <span className={`badge ${daysSilent && daysSilent > 60 ? 'badge-critical' : 'badge-high'}`}>
+                                                                        {daysSilent !== null ? `${daysSilent}d` : '—'}
+                                                                    </span>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
                                     </div>
                                 )}
                             </div>

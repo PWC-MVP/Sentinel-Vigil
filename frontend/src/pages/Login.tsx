@@ -97,7 +97,7 @@ export default function Login({ onLogin }: LoginProps) {
         outline: 'none',
         transition: 'all 0.22s',
         boxShadow: focused === which ? '0 0 0 3px rgba(208,74,2,0.1)' : '0 1px 3px rgba(0,0,0,0.05)',
-        fontFamily: "'Inter', system-ui, sans-serif",
+        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
         letterSpacing: '0.01em',
     });
 
@@ -110,7 +110,7 @@ export default function Login({ onLogin }: LoginProps) {
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             background: 'linear-gradient(145deg, #FFF6EE 0%, #FFE8D2 30%, #FFD8B8 62%, #FFCBA0 100%)',
             overflow: 'hidden', position: 'relative',
-            fontFamily: "'Inter', system-ui, sans-serif",
+            fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
         }}>
             {/* Parallax dot grid */}
             <div style={{
@@ -351,7 +351,7 @@ export default function Login({ onLogin }: LoginProps) {
                             <button
                                 type="submit"
                                 disabled={!canSubmit}
-                                style={{ width: '100%', height: 52, borderRadius: 11, border: 'none', background: canSubmit ? 'linear-gradient(135deg, #C04400 0%, #E8601A 50%, #FF7B35 100%)' : '#F0F4F8', color: canSubmit ? '#fff' : '#B0BEC5', fontWeight: 700, fontSize: 13, cursor: loading ? 'wait' : (canSubmit ? 'pointer' : 'not-allowed'), transition: 'all 0.25s', letterSpacing: '0.09em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: canSubmit ? '0 8px 28px rgba(208,74,2,0.35), 0 2px 8px rgba(208,74,2,0.15)' : 'none', fontFamily: "'Inter', system-ui, sans-serif" }}
+                                style={{ width: '100%', height: 52, borderRadius: 11, border: 'none', background: canSubmit ? 'linear-gradient(135deg, #C04400 0%, #E8601A 50%, #FF7B35 100%)' : '#F0F4F8', color: canSubmit ? '#fff' : '#B0BEC5', fontWeight: 700, fontSize: 13, cursor: loading ? 'wait' : (canSubmit ? 'pointer' : 'not-allowed'), transition: 'all 0.25s', letterSpacing: '0.09em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, boxShadow: canSubmit ? '0 8px 28px rgba(208,74,2,0.35), 0 2px 8px rgba(208,74,2,0.15)' : 'none', fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}
                                 onMouseEnter={e => { if (canSubmit) { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 14px 36px rgba(208,74,2,0.42), 0 4px 12px rgba(208,74,2,0.2)'; } }}
                                 onMouseLeave={e => { e.currentTarget.style.transform = ''; if (canSubmit) { e.currentTarget.style.boxShadow = '0 8px 28px rgba(208,74,2,0.35), 0 2px 8px rgba(208,74,2,0.15)'; } }}
                             >
