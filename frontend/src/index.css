@@ -235,26 +235,159 @@ body {
 .sidebar {
   width: 240px;
   flex-shrink: 0;
-  background: #FDFCFB;
-  border-right: 1px solid #ECEAE6;
+  background: var(--accent-light);
+  border-right: 1px solid var(--accent-border);
   box-shadow: 3px 0 16px rgba(26,25,23,0.08), 1px 0 3px rgba(26,25,23,0.04);
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+  transition: width 0.22s cubic-bezier(0.4,0,0.2,1);
 }
 
-.sidebar.collapsed { width: 64px; }
+.sidebar.collapsed {
+  width: 64px;
+}
+
+/* hide text labels when collapsed */
+.sidebar.collapsed .nav-item-label,
+.sidebar.collapsed .nav-section-label,
+.sidebar.collapsed .nav-section-divider,
+.sidebar.collapsed .sidebar-palette-wrap,
+.sidebar.collapsed .sidebar-version {
+  display: none;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px 0;
+}
+
+.sidebar.collapsed .nav-item.active {
+  border-left: none;
+  padding-left: 0;
+  border-radius: var(--radius-md);
+}
+
+/* ── Sidebar collapse toggle button ────────────────────────────────────── */
+.sidebar {
+  position: relative;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+}
+
+.sidebar.collapsed .sidebar-toggle {
+  right: 50%;
+  transform: translateX(50%);
+}
+
+.sidebar-toggle-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: #FDFCFB;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: #A09B95;
+  font-size: 11px;
+  transition: all var(--transition);
+  flex-shrink: 0;
+  box-shadow: var(--shadow-xs);
+}
+
+.sidebar-toggle-btn:hover {
+  background: #F3F1EE;
+  border-color: #C5BFB8;
+  color: #57534E;
+}
 
 .sidebar-nav {
   flex: 1;
-  padding: 10px 10px;
+  padding: 6px 10px 10px;
+}
+
+/* ── Sidebar colour palette ─────────────────────────────────────────────── */
+.sidebar-palette-wrap {
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-palette-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  transition: all var(--transition);
+}
+
+.sidebar-palette-btn:hover {
+  background: rgba(0,0,0,0.05);
+  border-color: var(--accent-border);
+}
+
+.sidebar-palette-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+}
+
+.sidebar-palette-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #A09B95;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.sidebar-palette-name {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.sidebar-palette-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 10px 8px;
+}
+
+.sidebar-palette-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  flex-shrink: 0;
+}
+
+.sidebar-palette-dot:hover {
+  transform: scale(1.18);
 }
 
 .sidebar-version {
-  padding: 10px 16px;
-  border-top: 1px solid var(--border-subtle);
+  padding: 8px 16px 12px;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-muted);
@@ -303,18 +436,40 @@ body {
 }
 
 .nav-item:hover {
-  background: #F3F1EE;
+  background: rgba(0,0,0,0.05);
   color: #1A1917;
 }
 
 .nav-item.active {
-  background: linear-gradient(to right, #FEF3EE, #FFF8F5);
-  color: #D04A02;
+  background: linear-gradient(to right, var(--accent-light), #fff);
+  color: var(--accent);
   font-weight: 600;
-  border-left: 3px solid #D04A02;
+  border-left: 3px solid var(--accent);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   padding-left: 9px;
-  box-shadow: inset 0 0 0 1px rgba(208,74,2,0.10), 2px 2px 8px rgba(208,74,2,0.08);
+  box-shadow: inset 0 0 0 1px var(--accent-border), 2px 2px 8px var(--accent-glow);
+}
+
+/* Tooltip on collapsed nav items */
+.sidebar.collapsed .nav-item[data-tooltip] {
+  position: relative;
+}
+.sidebar.collapsed .nav-item[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1A1917;
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  z-index: 200;
 }
 
 /* Keep active-pill as an alias */
