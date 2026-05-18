@@ -33,8 +33,10 @@ def load_config() -> dict:
     # Auto-load .env file from the project root if present
     load_dotenv(Path(__file__).parent / '.env')
     config_path = Path(__file__).parent / 'config.json'
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+    config = {}
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = json.load(f)
     # Environment variables take precedence over config.json for API tokens
     env_token_map = {
         'ipinfo_token': 'IPINFO_TOKEN',

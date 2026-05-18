@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useConfig } from '../hooks';
-import { storage } from '../utils/storage';
+
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faGear, faTriangleExclamation, faLock, faLightbulb, faShieldHalved,
@@ -60,12 +60,6 @@ const DEFAULTS: AppConfig = {
     SETTINGS_PASSWORD: '',
     OUTPUT_DIR: './reports',
 };
-
-function loadConfig(): AppConfig {
-    const saved = storage.getEnvConfig();
-    if (!saved) return { ...DEFAULTS };
-    return { ...DEFAULTS, ...saved } as AppConfig;
-}
 
 // ── Shared field components ───────────────────────────────────────────────────
 
@@ -171,22 +165,13 @@ function SettingsPasswordGate({ onUnlock }: { onUnlock: () => void }) {
             });
             const data = await resp.json();
             if (data.valid) {
-                storage.setSettingsUnlocked(true);
                 onUnlock();
             } else {
                 setError('Incorrect password. Access denied.');
                 setPin('');
             }
         } catch {
-            // If backend unreachable, allow unlock with localStorage password
-            const saved = storage.getEnvConfig();
-            const localPwd = saved?.SETTINGS_PASSWORD;
-            if (localPwd && pin === localPwd) {
-                storage.setSettingsUnlocked(true);
-                onUnlock();
-            } else {
-                setError('Backend unreachable. Enter your locally saved settings password.');
-            }
+            setError('Backend unreachable. Cannot verify password.');
         } finally {
             setLoading(false);
         }
@@ -264,21 +249,28 @@ function SettingsPasswordGate({ onUnlock }: { onUnlock: () => void }) {
 // ── Main Settings page ────────────────────────────────────────────────────────
 
 export default function Settings() {
-    const [unlocked, setUnlocked] = useState(() => storage.isSettingsUnlocked());
+    const [unlocked, setUnlocked] = useState(false);
 
     if (!unlocked) {
         return <SettingsPasswordGate onUnlock={() => setUnlocked(true)} />;
     }
-    return <SettingsContent onLock={() => { storage.setSettingsUnlocked(false); setUnlocked(false); }} />;
+    return <SettingsContent onLock={() => setUnlocked(false)} />;
 }
 
 // ── Settings content ──────────────────────────────────────────────────────────
 
 function SettingsContent({ onLock }: { onLock: () => void }) {
     const { config } = useConfig();
-    const [cfg, setCfg] = useState<AppConfig>(loadConfig);
+    const [cfg, setCfg] = useState<AppConfig>({ ...DEFAULTS });
     const [saving, setSaving] = useState(false);
     const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
+    useEffect(() => {
+        fetch('/api/config/env')
+            .then(r => r.json())
+            .then((data: Partial<AppConfig>) => setCfg(prev => ({ ...prev, ...data })))
+            .catch(() => {});
+    }, []);
 
     const set = (key: keyof AppConfig, value: string) => {
         setCfg(prev => ({ ...prev, [key]: value }));
@@ -288,8 +280,6 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
     const save = async () => {
         setSaving(true);
         setStatus(null);
-        storage.setEnvConfig(cfg as unknown as Record<string, string>);
-
         try {
             const resp = await fetch('/api/config/env', {
                 method: 'PATCH',
@@ -297,23 +287,16 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
                 body: JSON.stringify(cfg),
             });
             setStatus({
-                ok: true,
+                ok: resp.ok,
                 msg: resp.ok
-                    ? 'Configuration saved to browser storage and synced to backend.'
-                    : 'Saved to browser storage. Backend sync failed — will apply on next restart.',
+                    ? 'Configuration saved to backend.'
+                    : 'Failed to save — check backend logs.',
             });
         } catch {
-            setStatus({ ok: true, msg: 'Saved to browser storage. Backend unreachable — values persist locally.' });
+            setStatus({ ok: false, msg: 'Backend unreachable. Configuration not saved.' });
         } finally {
             setSaving(false);
         }
-    };
-
-    const clearStorage = () => {
-        if (!confirm('Clear all saved configuration from browser storage?')) return;
-        storage.setEnvConfig({});
-        setCfg({ ...DEFAULTS });
-        setStatus({ ok: true, msg: 'Browser storage cleared.' });
     };
 
     return (
@@ -329,14 +312,6 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
                         <div className="page-subtitle">Configure your Azure, Sentinel and API credentials</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                        <button
-                            className="btn btn-secondary btn-sm"
-                            onClick={clearStorage}
-                            style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
-                        >
-                            <FontAwesomeIcon icon={faRefresh} />
-                            Clear Storage
-                        </button>
                         <button
                             className="btn btn-secondary btn-sm"
                             onClick={onLock}
@@ -485,7 +460,7 @@ function SettingsContent({ onLock }: { onLock: () => void }) {
                         </button>
 
                         <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', textAlign: 'center' }}>
-                            Values are stored in browser localStorage and synced to the backend <code>.env</code>
+                            Values are saved to backend environment and applied immediately — no browser storage used.
                         </div>
                     </div>
 

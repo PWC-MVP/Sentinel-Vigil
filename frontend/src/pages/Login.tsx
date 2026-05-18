@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { storage } from '../utils/storage';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faLock, faUser, faShieldHalved, faFingerprint,
@@ -73,15 +72,27 @@ export default function Login({ onLogin }: LoginProps) {
         e.preventDefault();
         setLoading(true);
         setError('');
-        setTimeout(() => {
-            if (username === 'admin' && password === 'PwC@y14') {
-                storage.setAuthenticated(true);
+        try {
+            const resp = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password }),
+            });
+            if (!resp.ok) {
+                setError('Backend server is not responding. Ensure the backend is running on port 8000.');
+                return;
+            }
+            const data = await resp.json();
+            if (data.valid) {
                 onLogin();
             } else {
                 setError('Authentication failed. Invalid credentials.');
-                setLoading(false);
             }
-        }, 900);
+        } catch {
+            setError('Backend unreachable. Cannot authenticate.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const inputStyle = (which: 'user' | 'pass'): React.CSSProperties => ({

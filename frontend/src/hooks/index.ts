@@ -1,28 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getConfig, listInvestigations, listReports, type Config, type Job, type Report } from '../api/client';
 export type { Report };
-import { storage } from '../utils/storage';
 
 /* ── useConfig ─────────────────────────────────────────────────────────── */
 export function useConfig() {
-    // Initialise immediately from localStorage cache — avoids flash of empty state
-    const [config, setConfig] = useState<Config | null>(() => storage.getPublicConfig());
-    const [loading, setLoading] = useState(() => !storage.getPublicConfig());
+    const [config, setConfig] = useState<Config | null>(null);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         getConfig()
-            .then(c => {
-                storage.setPublicConfig(c);
-                setConfig(c);
-                setError(null);
-            })
-            .catch(e => {
-                // Only surface error when we have no cached data to show
-                if (!storage.getPublicConfig()) {
-                    setError(e.message || 'Failed to connect to backend');
-                }
-            })
+            .then(c => { setConfig(c); setError(null); })
+            .catch(e => setError(e.message || 'Failed to connect to backend'))
             .finally(() => setLoading(false));
     }, []);
 

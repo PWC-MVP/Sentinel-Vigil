@@ -6,7 +6,9 @@ from contextlib import asynccontextmanager
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI
+# pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -122,6 +124,34 @@ async def update_config(payload: dict):
     return {"status": "updated", "config": settings.to_public_dict()}
 
 
+@app.get("/api/config/env", tags=["system"])
+async def get_env_vars():
+    """Return current resolved env var values for the settings form."""
+    import os
+    return {
+        "SENTINEL_WORKSPACE_ID": settings.SENTINEL_WORKSPACE_ID,
+        "AZURE_TENANT_ID": settings.TENANT_ID,
+        "AZURE_CLIENT_ID": os.getenv("AZURE_CLIENT_ID", ""),
+        "AZURE_CLIENT_SECRET": os.getenv("AZURE_CLIENT_SECRET", ""),
+        "SUBSCRIPTION_ID": settings.SUBSCRIPTION_ID,
+        "RESOURCE_GROUP": settings.RESOURCE_GROUP,
+        "WORKSPACE_NAME": settings.WORKSPACE_NAME,
+        "IPINFO_TOKEN": settings.IPINFO_TOKEN,
+        "ABUSEIPDB_TOKEN": settings.ABUSEIPDB_TOKEN,
+        "VPNAPI_TOKEN": settings.VPNAPI_TOKEN,
+        "VIRUSTOTAL_API_KEY": settings.VIRUSTOTAL_API_KEY,
+        "AZURE_ANTHROPIC_API_KEY": os.getenv("AZURE_ANTHROPIC_API_KEY", ""),
+        "AZURE_ANTHROPIC_ENDPOINT": os.getenv("AZURE_ANTHROPIC_ENDPOINT", ""),
+        "AZURE_ANTHROPIC_MODEL": os.getenv("AZURE_ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        "GRAPH_MAIL_FROM": settings.GRAPH_MAIL_FROM,
+        "GRAPH_CLIENT_ID": os.getenv("GRAPH_CLIENT_ID", ""),
+        "GRAPH_CLIENT_SECRET": os.getenv("GRAPH_CLIENT_SECRET", ""),
+        "SENTINEL_COMMENT_WEBHOOK_URL": settings.SENTINEL_COMMENT_WEBHOOK_URL,
+        "SETTINGS_PASSWORD": settings.SETTINGS_PASSWORD,
+        "OUTPUT_DIR": os.getenv("OUTPUT_DIR", "./reports"),
+    }
+
+
 @app.patch("/api/config/env", tags=["system"])
 async def update_env_vars(payload: dict):
     """Update .env file and reload configuration in-memory (no restart required)."""
@@ -138,6 +168,21 @@ async def update_env_vars(payload: dict):
     reset_credential()
 
     return {"status": "updated", "message": "Configuration saved and reloaded successfully."}
+
+
+@app.post("/api/auth/login", tags=["system"])
+async def login(payload: dict):
+    """Validate app login credentials against APP_USERNAME / APP_PASSWORD from .env."""
+    import hmac
+    username = payload.get("username", "")
+    password = payload.get("password", "")
+    ok = (
+        username
+        and password
+        and hmac.compare_digest(username, settings.APP_USERNAME)
+        and hmac.compare_digest(password, settings.APP_PASSWORD)
+    )
+    return {"valid": bool(ok)}
 
 
 @app.post("/api/auth/verify-settings", tags=["system"])

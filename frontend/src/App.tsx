@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import './index.css';
-import { storage } from './utils/storage';
 import Layout from './components/Layout';
 import Chat from './pages/Chat';
 import Dashboard from './pages/Dashboard';
@@ -32,32 +31,11 @@ type Page = 'chat' | 'dashboard' | 'investigate' | 'reports' | 'enrich' | 'kql' 
 
 function App() {
   const [page, setPage] = useState<Page>('chat');
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => storage.isAuthenticated());
-
-  useEffect(() => {
-    // Sync in case another tab updated auth state
-    setIsAuthenticated(storage.isAuthenticated());
-  }, []);
-
-  // On startup, push any localStorage-stored credentials to the backend so it
-  // has the correct workspace/tenant/API keys even after a backend restart.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const envConfig = storage.getEnvConfig();
-    if (!envConfig || Object.keys(envConfig).length === 0) return;
-    fetch('/api/config/env', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(envConfig),
-    }).catch(() => {});
-  }, [isAuthenticated]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   const navigate = (p: string) => setPage(p as Page);
 
-  const handleLogout = () => {
-    storage.clearAll();
-    setIsAuthenticated(false);
-  };
+  const handleLogout = () => setIsAuthenticated(false);
 
   const renderPage = () => {
     switch (page) {
