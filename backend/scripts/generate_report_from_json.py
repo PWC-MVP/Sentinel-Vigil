@@ -15,8 +15,12 @@ Options:
 import json
 import sys
 from pathlib import Path
-from investigator import InvestigationResult, AnomalyFinding, IPIntelligence, UserProfile, MFAStatus, DeviceInfo, RiskDetection, RiskySignIn, UserRiskProfile, DLPEvent
-from report_generator import CompactReportGenerator
+
+# Allow running as a standalone script from the project root
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from backend.core.investigator import InvestigationResult, AnomalyFinding, IPIntelligence, UserProfile, MFAStatus, DeviceInfo, RiskDetection, RiskySignIn, UserRiskProfile, DLPEvent
+from backend.core.report_generator import CompactReportGenerator
 from datetime import datetime, timedelta
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1142,8 +1146,8 @@ SecurityIncident
     # 🗑️ CLEANUP: Remove old investigation JSON and HTML files (3-day retention for lab data)
     print(f"\n🗑️ Running cleanup of old investigation files...")
     try:
-        from cleanup_old_investigations import cleanup_old_investigations
-        cleanup_old_investigations(temp_dir="temp", reports_dir="reports", retention_days=3, dry_run=False)
+        from backend.scripts.cleanup_old_investigations import cleanup_old_investigations
+        cleanup_old_investigations(temp_dir="data/temp", reports_dir="data/reports", retention_days=3, dry_run=False)
     except Exception as e:
         print(f"⚠️  Cleanup skipped: {e}")
 

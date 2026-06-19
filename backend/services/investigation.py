@@ -3,7 +3,6 @@ Investigation orchestration service.
 Replaces the Copilot + MCP workflow for running user security investigations.
 Uses the existing Python code (investigator.py, enrich_ips.py, etc.) directly.
 """
-import sys
 import asyncio
 import json
 import logging
@@ -11,16 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Awaitable
 
-# Add project root to sys.path so we can import investigator.py
-ROOT = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(ROOT))
-
-from investigator import (
+from backend.core.investigator import (
     InvestigationResult, AnomalyFinding, IPIntelligence,
     UserProfile, MFAStatus, DeviceInfo, RiskDetection,
     RiskySignIn, UserRiskProfile, DLPEvent, InvestigationConfig,
 )
-from report_generator import CompactReportGenerator
+from backend.core.report_generator import CompactReportGenerator
 
 from backend.config import settings
 from backend.services import sentinel as sentinel_svc
@@ -597,7 +592,7 @@ def _compute_risk(
 
 def generate_html_report(result_dict: dict, upn: str) -> Path:
     """Generate an HTML report using the existing report_generator.py."""
-    from investigator import (
+    from backend.core.investigator import (
         InvestigationResult, AnomalyFinding, IPIntelligence,
         UserProfile, MFAStatus, DeviceInfo, UserRiskProfile, RiskDetection,
     )

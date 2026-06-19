@@ -18,15 +18,11 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 # Copy backend source
 COPY backend/ ./backend/
 
-# Root-level modules imported by the backend
-COPY investigator.py report_generator.py enrich_ips.py \
-     generate_mitre_coverage_report.py generate_mitre_heatmap.py ./
-
 # Copy built frontend static files from Stage 1
 COPY --from=frontend-build /build/frontend/dist ./frontend/dist
 
-# Writable dirs for reports and temp files
-RUN mkdir -p reports tmp
+# Writable dirs for runtime data
+RUN mkdir -p data/reports data/jobs data/temp
 
 EXPOSE 8000
 

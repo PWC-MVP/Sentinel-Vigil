@@ -8,7 +8,7 @@ from datetime import datetime
 import json
 import os
 import socket
-from investigator import InvestigationResult, AnomalyFinding, IPIntelligence, DeviceInfo
+from backend.core.investigator import InvestigationResult, IPIntelligence
 
 
 class CompactReportGenerator:

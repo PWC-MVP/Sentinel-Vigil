@@ -15,6 +15,9 @@ from pathlib import Path
 from datetime import datetime
 import json
 
+_SCRIPTS_DIR = Path(__file__).parent
+_PROJECT_ROOT = _SCRIPTS_DIR.parent.parent
+
 def run_command(cmd: list, description: str = "") -> bool:
     """Run a shell command and return success status."""
     try:
@@ -36,7 +39,7 @@ def run_command(cmd: list, description: str = "") -> bool:
 def create_summary_report() -> str:
     """Create a summary report of all generated files."""
     
-    output_dir = Path("reports")
+    output_dir = _PROJECT_ROOT / "data" / "reports"
     timestamp = datetime.now().strftime("%Y%m%d")
     
     summary = f"""
@@ -335,13 +338,13 @@ def main():
     print("║" + " " * 78 + "║")
     print("╚" + "═" * 78 + "╝")
     
-    output_dir = Path("reports")
+    output_dir = _PROJECT_ROOT / "data" / "reports"
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Step 1: Generate HTML Report
     print("\n[1/3] 📄 Generating comprehensive HTML report...")
     if run_command(
-        [sys.executable, "generate_mitre_coverage_report.py"],
+        [sys.executable, str(_SCRIPTS_DIR / "generate_mitre_coverage_report.py")],
         "Executing HTML report generator"
     ):
         print("✅ HTML report generation complete")
@@ -351,7 +354,7 @@ def main():
     # Step 2: Generate Heatmaps
     print("\n[2/3] 🔥 Generating interactive heatmap visualizations...")
     if run_command(
-        [sys.executable, "generate_mitre_heatmap.py"],
+        [sys.executable, str(_SCRIPTS_DIR / "generate_mitre_heatmap.py")],
         "Executing heatmap generator"
     ):
         print("✅ Heatmap generation complete")

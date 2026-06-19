@@ -143,7 +143,7 @@ const NAV = [
     { id: 'investigate',     label: 'Investigate',           icon: faSearch,            section: 'MAIN' },
     { id: 'reports',         label: 'Reports',               icon: faFileLines,         section: 'MAIN' },
     { id: 'enrich',          label: 'IP Enrichment',         icon: faGlobe,             section: 'TOOLS' },
-    { id: 'kql',             label: 'KQL Explorer',          icon: faBolt,              section: 'TOOLS' },
+    { id: 'kql',             label: 'Log Parser',            icon: faBolt,              section: 'TOOLS' },
     { id: 'geomap',          label: 'Sign-in GeoMap',        icon: faMapLocationDot,    section: 'TOOLS' },
     { id: 'hunting',         label: 'Threat Hunting',        icon: faCrosshairs,        section: 'TOOLS' },
     { id: 'threat-feed',     label: 'Vigil Threat Reporter', icon: faNewspaper,         section: 'TOOLS' },

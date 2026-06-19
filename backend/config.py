@@ -55,7 +55,7 @@ class Config:
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
 
     # ── Report output ────────────────────────────────────────────
-    OUTPUT_DIR: Path = ROOT / (os.getenv("OUTPUT_DIR") or _raw.get("output_dir", "reports"))
+    OUTPUT_DIR: Path = ROOT / (os.getenv("OUTPUT_DIR") or _raw.get("output_dir", "data/reports"))
 
     # ── Optional label/SIT mappings ─────────────────────────────
     SIT_MAPPING: dict = {
@@ -149,7 +149,7 @@ class Config:
         cls.SHODAN_TOKEN = os.getenv("SHODAN_TOKEN") or raw.get("shodan_token") or ""
         cls.GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
-        cls.OUTPUT_DIR = ROOT / (os.getenv("OUTPUT_DIR") or raw.get("output_dir", "reports"))
+        cls.OUTPUT_DIR = ROOT / (os.getenv("OUTPUT_DIR") or raw.get("output_dir", "data/reports"))
 
         cls.SIT_MAPPING = {k: v for k, v in raw.get("sit_mapping", {}).items() if not k.startswith("__")}
         cls.LABEL_MAPPING = {k: v for k, v in raw.get("label_mapping", {}).items() if not k.startswith("__")}

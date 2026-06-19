@@ -12,8 +12,8 @@ from typing import Any, Callable, AsyncGenerator
 
 from pydantic import BaseModel
 
-# Persist completed/failed jobs here (project root / jobs/)
-_JOBS_DIR = Path(__file__).parent.parent.parent / "jobs"
+# Persist completed/failed jobs here (project root / data/jobs/)
+_JOBS_DIR = Path(__file__).parent.parent.parent / "data" / "jobs"
 
 
 class JobStatus(str, Enum):

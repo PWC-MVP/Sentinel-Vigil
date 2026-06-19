@@ -14,16 +14,18 @@ config.json
 config.json.stelznet
 config.json.zava
 
-# Investigation data and reports (sensitive)
-# Keep the directories but ignore their contents
-temp/*
-!temp/.gitkeep
-!temp/investigation_sample_jsmith.json
-reports/**
-!reports/**/
-!reports/**/.gitkeep
-!reports/**/*example*
+# Runtime data (investigation outputs, jobs, temp files — sensitive)
+# Keep the directory structure but ignore their contents
+data/temp/*
+!data/temp/.gitkeep
+!data/temp/investigation_sample_jsmith.json
+data/reports/**
+!data/reports/**/
+!data/reports/**/.gitkeep
+!data/reports/**/*example*
+data/jobs/
 archive/
+reports/backups/
 
 # Authoring (blog drafts and style guides)
 authoring/
@@ -57,7 +59,6 @@ mcp-apps/**/dist/
 
 # Container app runtime artifacts
 tmp/
-jobs/
 =12.19.0
 
 # Node version manager artifacts
