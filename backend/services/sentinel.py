@@ -85,10 +85,16 @@ async def run_kql(
         if response.status == LogsQueryStatus.FAILURE:
             raise RuntimeError(f"KQL query failed: {response.partial_error}")
 
-        if not response.tables:
+        # LogsQueryPartialResult (PARTIAL status) uses .partial_data; full result uses .tables
+        if response.status == LogsQueryStatus.PARTIAL:
+            tables = response.partial_data
+        else:
+            tables = response.tables
+
+        if not tables:
             return {"columns": [], "rows": [], "row_count": 0}
 
-        table = response.tables[0]
+        table = tables[0]
         columns = [getattr(col, "name", col) for col in table.columns]
         rows = [
             {columns[i]: _serialize(val) for i, val in enumerate(row)}

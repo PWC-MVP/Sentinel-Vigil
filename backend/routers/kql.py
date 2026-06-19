@@ -67,6 +67,34 @@ def _parse_llm_json(text: str) -> dict:
     return _json.loads(s.strip())
 
 
+def _extract_fix_from_response(text: str) -> tuple[str, str]:
+    """
+    Robustly extract (query, explanation) from a fix response.
+    Handles: valid JSON, partial JSON, or bare KQL text returned by the LLM.
+    Returns ("", "") on complete failure so the caller can retry.
+    """
+    if not text or not text.strip():
+        return "", ""
+    try:
+        obj = _parse_llm_json(text)
+        return obj.get("query", "").replace("\\n", "\n").strip(), obj.get("explanation", "fixed")
+    except Exception:
+        pass
+    # Fallback: try to find a JSON object anywhere in the text
+    try:
+        start = text.index("{")
+        end   = text.rindex("}") + 1
+        obj   = _json.loads(text[start:end])
+        return obj.get("query", "").replace("\\n", "\n").strip(), obj.get("explanation", "fixed")
+    except Exception:
+        pass
+    # Last resort: if the text looks like KQL (starts with a table name / pipe), treat it as the query
+    stripped = text.strip()
+    if stripped and not stripped.startswith("{"):
+        return stripped, "Query returned as plain text"
+    return "", ""
+
+
 @router.post("/generate")
 async def generate_kql_from_prompt(req: KQLGenerateRequest):
     """Use LLM to generate a KQL query from a natural language description."""
@@ -157,9 +185,7 @@ async def smart_run_kql(req: SmartRunRequest):
 
                 try:
                     fix_result = await _llm_complete(_KQL_FIX_SYSTEM, fix_prompt)
-                    fix_obj = _parse_llm_json(fix_result["text"])
-                    new_query = fix_obj.get("query", "").replace("\\n", "\n").strip()
-                    fix_note = fix_obj.get("explanation", "Query corrected")
+                    new_query, fix_note = _extract_fix_from_response(fix_result["text"])
 
                     if not new_query or new_query == query:
                         yield _sse({"type": "log", "level": "warn",
@@ -169,10 +195,9 @@ async def smart_run_kql(req: SmartRunRequest):
                         query = new_query
 
                 except Exception as llm_err:
-                    yield _sse({"type": "log", "level": "error",
-                                "msg": f"AI fix request failed: {llm_err}"})
-                    yield _sse({"type": "done", "success": False, "error": str(llm_err)})
-                    return
+                    yield _sse({"type": "log", "level": "warn",
+                                "msg": f"AI fix request failed: {llm_err} — retrying"})
+                    # don't abort — let the loop retry with the original query
 
         yield _sse({"type": "done", "success": False, "error": "Max retries exceeded"})
 
@@ -406,7 +431,7 @@ async def run_with_fix(req: RunWithFixRequest):
         query = req.query
         status = get_llm_status()
 
-        for attempt in range(1, 4):
+        for attempt in range(1, 5):
             run_label = "Running query" if attempt == 1 else f"Retrying with fixed query (attempt {attempt})"
             yield _sse({"type": "step", "label": run_label, "status": "running"})
             await asyncio.sleep(0.04)
@@ -427,7 +452,7 @@ async def run_with_fix(req: RunWithFixRequest):
                 yield _sse({"type": "step", "label": run_label, "status": "error",
                             "detail": error_str[:280]})
 
-                if attempt >= 3 or not status.get("available"):
+                if attempt >= 4 or not status.get("available"):
                     yield _sse({"type": "done", "success": False, "error": error_str})
                     return
 
@@ -442,25 +467,19 @@ async def run_with_fix(req: RunWithFixRequest):
                 )
                 try:
                     fix_result = await _llm_complete(_KQL_FIX_SYSTEM, fix_prompt)
-                    fix_obj = _parse_llm_json(fix_result["text"])
-                    new_query = fix_obj.get("query", "").replace("\\n", "\n").strip()
-                    fix_note = fix_obj.get("explanation", "Query corrected")
-
-                    if new_query and new_query != query:
-                        query = new_query
-                        yield _sse({"type": "step", "label": fix_label, "status": "done",
-                                    "detail": fix_note})
-                        yield _sse({"type": "query", "query": query, "alias": "", "explanation": ""})
-                    else:
-                        yield _sse({"type": "step", "label": fix_label, "status": "error",
-                                    "detail": "AI returned unchanged query"})
-                        yield _sse({"type": "done", "success": False, "error": error_str})
-                        return
+                    new_query, fix_note = _extract_fix_from_response(fix_result["text"])
                 except Exception as llm_err:
+                    new_query, fix_note = "", str(llm_err)[:120]
+
+                if new_query and new_query != query:
+                    query = new_query
+                    yield _sse({"type": "step", "label": fix_label, "status": "done",
+                                "detail": fix_note})
+                    yield _sse({"type": "query", "query": query, "alias": "", "explanation": ""})
+                else:
                     yield _sse({"type": "step", "label": fix_label, "status": "error",
-                                "detail": str(llm_err)[:200]})
-                    yield _sse({"type": "done", "success": False, "error": str(llm_err)})
-                    return
+                                "detail": fix_note or "AI returned empty or unchanged query — will retry"})
+                    # don't abort — outer loop will retry with the (possibly unchanged) query
 
         yield _sse({"type": "done", "success": False, "error": "Max retries exceeded"})
 
@@ -518,7 +537,7 @@ async def parser_run(req: ParserRunRequest):
         yield _sse({"type": "query", "query": parser_query, "alias": function_alias, "explanation": explanation})
 
         # Steps 3+ — run with auto-fix
-        for attempt in range(1, 4):
+        for attempt in range(1, 5):
             run_label = (
                 f"Running parser against {req.table}"
                 if attempt == 1 else
@@ -542,7 +561,7 @@ async def parser_run(req: ParserRunRequest):
                 short_err = error_str[:280]
                 yield _sse({"type": "step", "label": run_label, "status": "error", "detail": short_err})
 
-                if attempt >= 3:
+                if attempt >= 4:
                     yield _sse({"type": "done", "success": False, "error": error_str})
                     return
 
@@ -558,25 +577,19 @@ async def parser_run(req: ParserRunRequest):
                 )
                 try:
                     fix_result = await _llm_complete(_KQL_FIX_SYSTEM, fix_prompt)
-                    fix_obj = _parse_llm_json(fix_result["text"])
-                    new_query = fix_obj.get("query", "").replace("\\n", "\n").strip()
-                    fix_note = fix_obj.get("explanation", "Query corrected")
-
-                    if new_query and new_query != parser_query:
-                        parser_query = new_query
-                        yield _sse({"type": "step", "label": fix_label, "status": "done", "detail": fix_note})
-                        yield _sse({"type": "query", "query": parser_query, "alias": function_alias,
-                                    "explanation": explanation})
-                    else:
-                        yield _sse({"type": "step", "label": fix_label, "status": "error",
-                                    "detail": "AI returned unchanged query"})
-                        yield _sse({"type": "done", "success": False, "error": error_str})
-                        return
+                    new_query, fix_note = _extract_fix_from_response(fix_result["text"])
                 except Exception as llm_err:
+                    new_query, fix_note = "", str(llm_err)[:120]
+
+                if new_query and new_query != parser_query:
+                    parser_query = new_query
+                    yield _sse({"type": "step", "label": fix_label, "status": "done", "detail": fix_note})
+                    yield _sse({"type": "query", "query": parser_query, "alias": function_alias,
+                                "explanation": explanation})
+                else:
                     yield _sse({"type": "step", "label": fix_label, "status": "error",
-                                "detail": str(llm_err)[:200]})
-                    yield _sse({"type": "done", "success": False, "error": str(llm_err)})
-                    return
+                                "detail": fix_note or "AI returned empty or unchanged query — will retry"})
+                    # don't abort — outer loop retries with the (possibly unchanged) query
 
         yield _sse({"type": "done", "success": False, "error": "Max retries exceeded"})
 
@@ -609,9 +622,14 @@ async def save_function(req: SaveFunctionRequest):
         f"/providers/Microsoft.OperationalInsights/workspaces/{ws}"
         f"/savedSearches/{saved_search_id}"
     )
+    # 2020-08-01 is the minimum version that persists functionAlias correctly.
+    # Later versions (2023-09-01, 2025-07-01) do not exist for this resource type
+    # and cause ARM to silently strip functionAlias from the saved object.
+    _SS_API = "2020-08-01"
+
     props: dict = {
         "category":      req.category,
-        "displayName":   req.function_name,   # matches alias so portal search finds it
+        "displayName":   req.display_name or req.function_name,
         "query":         req.query,
         "functionAlias": req.function_name,
         "version":       2,
@@ -619,12 +637,11 @@ async def save_function(req: SaveFunctionRequest):
     if req.function_parameters.strip():
         props["functionParameters"] = req.function_parameters.strip()
 
-    # No etag on create — let Azure assign one; avoids potential PUT conflict
     body = {"properties": props}
 
     try:
         put_result = await sentinel_svc.call_azure_mgmt_api_async(
-            path, "2025-07-01", method="PUT", body=body
+            path, _SS_API, method="PUT", body=body
         )
         put_alias  = put_result.get("properties", {}).get("functionAlias", "NOT_SET")
         put_id     = put_result.get("id", "")
@@ -635,7 +652,7 @@ async def save_function(req: SaveFunctionRequest):
 
     # Read back immediately to confirm the alias persisted
     try:
-        verify      = await sentinel_svc.call_azure_mgmt_api_async(path, "2025-07-01")
+        verify      = await sentinel_svc.call_azure_mgmt_api_async(path, _SS_API)
         saved_alias = verify.get("properties", {}).get("functionAlias", "")
         print(f"[save-function] GET verify — functionAlias={saved_alias!r}")
         return {
@@ -665,7 +682,7 @@ async def list_workspace_functions():
         f"/savedSearches"
     )
     try:
-        data = await sentinel_svc.call_azure_mgmt_api_async(path, "2025-07-01")
+        data = await sentinel_svc.call_azure_mgmt_api_async(path, "2020-08-01")
         all_saved = data.get("value", [])
         functions = [
             {

@@ -64,6 +64,7 @@ export default function KQLExplorer() {
     const [parserErr,   setParserErr]  = useState<string | null>(null);
     const [parserSteps, setParserSteps] = useState<ParserStep[]>([]);
     const [runResult,   setRunResult]  = useState<LogResult | null>(null);
+    const [parserValid, setParserValid] = useState(false); // true only after a successful run
     const [running,     setRunning]    = useState(false);
     const [implementing,setImpl]       = useState(false);
     const [implSuccess, setImplSucc]   = useState<string | null>(null);
@@ -155,7 +156,7 @@ export default function KQLExplorer() {
 
     const parserRun = async () => {
         if (!logs || !expanded) return;
-        setCreating(true); setParserErr(null);
+        setCreating(true); setParserErr(null); setParserValid(false);
         setParserSteps([]); setRunResult(null);
         setParserKQL(''); setAlias(''); setNote('');
         setImplSucc(null); setImplErr(null);
@@ -203,7 +204,10 @@ export default function KQLExplorer() {
                         if (evt.type === 'step')   upsertStep(evt.label, evt.status, evt.detail);
                         if (evt.type === 'query') { setParserKQL(evt.query); setAlias(evt.alias); setNote(evt.explanation); }
                         if (evt.type === 'result')  setRunResult(evt.data);
-                        if (evt.type === 'done' && !evt.success && evt.error) setParserErr(evt.error);
+                        if (evt.type === 'done') {
+                            if (evt.success) setParserValid(true);
+                            else if (evt.error) setParserErr(evt.error);
+                        }
                     } catch { /* ignore malformed SSE line */ }
                 }
             }
@@ -215,7 +219,7 @@ export default function KQLExplorer() {
 
     const runParser = async () => {
         if (!parserKQL.trim()) return;
-        setRunning(true); setParserErr(null); setRunResult(null);
+        setRunning(true); setParserErr(null); setRunResult(null); setParserValid(false);
         // Append run-with-fix steps after existing steps (don't clear generation steps)
         const upsertStep = (label: string, status: ParserStep['status'], detail?: string) =>
             setParserSteps(prev => {
@@ -249,7 +253,10 @@ export default function KQLExplorer() {
                         if (evt.type === 'step')   upsertStep(evt.label, evt.status, evt.detail);
                         if (evt.type === 'query' && evt.query)  setParserKQL(evt.query);
                         if (evt.type === 'result')  setRunResult(evt.data);
-                        if (evt.type === 'done' && !evt.success && evt.error) setParserErr(evt.error);
+                        if (evt.type === 'done') {
+                            if (evt.success) setParserValid(true);
+                            else if (evt.error) setParserErr(evt.error);
+                        }
                     } catch { /* ignore */ }
                 }
             }
@@ -875,9 +882,10 @@ export default function KQLExplorer() {
                                 ) : (
                                     <button
                                         className="btn btn-primary"
-                                        disabled={creating || running}
+                                        disabled={creating || running || !parserValid}
                                         onClick={openSaveModal}
-                                        style={{ width: '100%', padding: '12px', fontSize: 13, borderRadius: 8, background: '#059669', borderColor: '#059669' }}
+                                        title={!parserValid ? 'Run the parser successfully before implementing' : undefined}
+                                        style={{ width: '100%', padding: '12px', fontSize: 13, borderRadius: 8, background: parserValid ? '#059669' : 'var(--text-muted)', borderColor: parserValid ? '#059669' : 'var(--text-muted)', cursor: parserValid ? 'pointer' : 'not-allowed' }}
                                     >
                                         <FontAwesomeIcon icon={faCode} style={{ marginRight: 10 }} />Implement as Workspace Function
                                     </button>
