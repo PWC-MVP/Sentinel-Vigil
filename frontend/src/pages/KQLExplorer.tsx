@@ -1,10 +1,10 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faDatabase, faSpinner, faRefresh, faChevronRight, faChevronDown,
     faSearch, faArrowUp, faArrowDown, faXmark, faRobot,
     faCode, faPlay, faCheckCircle, faTriangleExclamation,
-    faCircleInfo, faTable, faPlus, faFilter, faWrench,
+    faCircleInfo, faTable, faPlus, faFilter, faWrench, faClock,
 } from '@fortawesome/free-solid-svg-icons';
 import { http as axios } from '../api/client';
 
@@ -69,6 +69,32 @@ export default function KQLExplorer() {
     const [implementing,setImpl]       = useState(false);
     const [implSuccess, setImplSucc]   = useState<string | null>(null);
     const [implError,   setImplErr]    = useState<string | null>(null);
+    const [expRunRows,  setExpRunRows] = useState<Set<number>>(new Set());
+
+    const toggleRunRow = (i: number) => setExpRunRows(prev => {
+        const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s;
+    });
+
+    // ── drawer resize ────────────────────────────────────────────
+    const [drawerWidth, setDrawerWidth] = useState(560);
+    const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+    const onDrawerDragStart = (e: React.MouseEvent) => {
+        e.preventDefault();
+        dragRef.current = { startX: e.clientX, startW: drawerWidth };
+        const onMove = (ev: MouseEvent) => {
+            if (!dragRef.current) return;
+            const delta = dragRef.current.startX - ev.clientX;
+            setDrawerWidth(Math.min(window.innerWidth - 60, Math.max(360, dragRef.current.startW + delta)));
+        };
+        const onUp = () => {
+            dragRef.current = null;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
 
     // ── save-as-function modal ────────────────────────────────────
     const [saveModal,    setSaveModal]   = useState(false);
@@ -77,6 +103,9 @@ export default function KQLExplorer() {
     const [saveParams,   setSaveParams]  = useState<FnParam[]>([]);
 
     useEffect(() => { loadTables(); }, []);
+    useEffect(() => {
+        if (expanded) fetchLogs(expanded, globSearch, colFilters, sortCol, sortDesc);
+    }, [timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── API helpers ───────────────────────────────────────────────
 
@@ -157,7 +186,7 @@ export default function KQLExplorer() {
     const parserRun = async () => {
         if (!logs || !expanded) return;
         setCreating(true); setParserErr(null); setParserValid(false);
-        setParserSteps([]); setRunResult(null);
+        setParserSteps([]); setRunResult(null); setExpRunRows(new Set());
         setParserKQL(''); setAlias(''); setNote('');
         setImplSucc(null); setImplErr(null);
 
@@ -175,7 +204,7 @@ export default function KQLExplorer() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     table: expanded,
-                    sample_logs: logs.rows.slice(0, 10),
+                    sample_logs: logs.rows.slice(0, 20),
                     columns: logs.columns,
                     days: TIME_TO_DAYS[timeRange] || 1,
                 }),
@@ -329,41 +358,95 @@ export default function KQLExplorer() {
             <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
                 {/* Toolbar */}
-                <div className="card" style={{ padding: '12px 16px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ position: 'relative', flex: 1 }}>
-                            <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text-muted)', pointerEvents: 'none' }} />
-                            <input
-                                className="form-input"
-                                placeholder="Search tables…"
-                                value={tableSearch}
-                                onChange={e => setTableSearch(e.target.value)}
-                                style={{ paddingLeft: 30, height: 34, fontSize: 12, width: '100%', boxSizing: 'border-box' }}
-                            />
-                        </div>
-                        <select className="form-select" value={timeRange} onChange={e => setTimeRange(e.target.value)} style={{ height: 34, fontSize: 12, width: 140 }}>
+                <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    background: 'linear-gradient(135deg, #FAFAF9 0%, #FFFFFF 100%)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    padding: '10px 14px',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.05), inset 0 0 0 1px rgba(255,255,255,0.9)',
+                }}>
+                    {/* Search */}
+                    <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+                        <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--text-muted)', pointerEvents: 'none' }} />
+                        <input
+                            className="form-input"
+                            placeholder="Search tables…"
+                            value={tableSearch}
+                            onChange={e => setTableSearch(e.target.value)}
+                            style={{ paddingLeft: 34, height: 36, fontSize: 12.5, width: '100%', boxSizing: 'border-box', borderRadius: 8 }}
+                        />
+                    </div>
+
+                    <div style={{ width: 1, height: 22, background: 'var(--border)', flexShrink: 0 }} />
+
+                    {/* Time range */}
+                    <div style={{ position: 'relative', flexShrink: 0 }}>
+                        <FontAwesomeIcon icon={faClock} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 11, color: 'var(--pwc-orange)', pointerEvents: 'none', zIndex: 1 }} />
+                        <select
+                            className="form-select"
+                            value={timeRange}
+                            onChange={e => setTimeRange(e.target.value)}
+                            style={{
+                                height: 36, fontSize: 12, width: 155, paddingLeft: 28,
+                                borderRadius: 8, fontWeight: 500,
+                                border: '1px solid var(--pwc-orange-border)',
+                                background: 'var(--pwc-orange-light)',
+                                color: 'var(--pwc-orange)',
+                                boxSizing: 'border-box',
+                            }}
+                        >
                             {TIME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
+                    </div>
+
+                    <div style={{ width: 1, height: 22, background: 'var(--border)', flexShrink: 0 }} />
+
+                    {/* Toggle pill group */}
+                    <div style={{ display: 'flex', gap: 3, background: '#F0EFED', borderRadius: 9, padding: '3px 4px', flexShrink: 0 }}>
                         <button
-                            className={`btn btn-sm ${customOnly ? 'btn-primary' : 'btn-ghost'}`}
                             onClick={() => setCustomOnly(v => !v)}
-                            style={{ height: 34, fontSize: 12 }}
+                            style={{
+                                height: 30, fontSize: 12, paddingInline: 12, borderRadius: 6,
+                                border: 'none', cursor: 'pointer', fontWeight: 500,
+                                background: customOnly ? '#FFFFFF' : 'transparent',
+                                color: customOnly ? 'var(--text-primary)' : 'var(--text-muted)',
+                                boxShadow: customOnly ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
+                                transition: 'all 0.15s',
+                            }}
                         >
                             Custom only
                         </button>
                         <button
-                            className={`btn btn-sm ${hideEmpty ? 'btn-primary' : 'btn-ghost'}`}
                             onClick={() => setHideEmpty(v => !v)}
-                            style={{ height: 34, fontSize: 12 }}
+                            style={{
+                                height: 30, fontSize: 12, paddingInline: 12, borderRadius: 6,
+                                border: 'none', cursor: 'pointer', fontWeight: 500,
+                                background: hideEmpty ? '#FFFFFF' : 'transparent',
+                                color: hideEmpty ? 'var(--text-primary)' : 'var(--text-muted)',
+                                boxShadow: hideEmpty ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
+                                transition: 'all 0.15s',
+                            }}
                         >
                             Hide empty
                         </button>
-
-                        <button className="btn btn-ghost btn-sm" onClick={loadTables} style={{ height: 34, fontSize: 12 }}>
-                            <FontAwesomeIcon icon={faRefresh} spin={tabLoading} style={{ marginRight: 6 }} />
-                            Refresh
-                        </button>
                     </div>
+
+                    {/* Refresh */}
+                    <button
+                        onClick={loadTables}
+                        style={{
+                            height: 36, fontSize: 12, paddingInline: 14, flexShrink: 0,
+                            borderRadius: 8, border: '1px solid var(--border)',
+                            background: '#FFFFFF', cursor: 'pointer', color: 'var(--text-secondary)',
+                            display: 'flex', alignItems: 'center', gap: 7, fontWeight: 500,
+                            boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                            transition: 'all 0.15s',
+                        }}
+                    >
+                        <FontAwesomeIcon icon={faRefresh} spin={tabLoading} style={{ fontSize: 11 }} />
+                        Refresh
+                    </button>
                 </div>
 
                 {/* Tables card */}
@@ -633,7 +716,7 @@ export default function KQLExplorer() {
                                                                             <td colSpan={logs.columns.length + 1} style={{ padding: '0 8px 10px 32px', background: 'rgba(0,0,0,0.02)' }}>
                                                                                 <pre style={{
                                                                                     margin: 0, padding: '10px 12px',
-                                                                                    background: '#0d1117', color: '#7dd3fc',
+                                                                                    background: '#f6f8fa', color: '#24292e',
                                                                                     border: '1px solid var(--border)',
                                                                                     borderRadius: 6,
                                                                                     fontSize: 10.5,
@@ -681,12 +764,24 @@ export default function KQLExplorer() {
 
                     {/* Drawer panel */}
                     <div style={{
-                        position: 'fixed', top: 0, right: 0, bottom: 0, width: 560,
+                        position: 'fixed', top: 0, right: 0, bottom: 0, width: drawerWidth,
                         background: '#fff', borderLeft: '1px solid var(--border)',
                         zIndex: 1100, display: 'flex', flexDirection: 'column',
                         boxShadow: '-12px 0 40px rgba(0,0,0,0.14)',
                         animation: 'drawerSlideIn 0.22s ease-out',
                     }}>
+                        {/* Drag handle */}
+                        <div
+                            onMouseDown={onDrawerDragStart}
+                            style={{
+                                position: 'absolute', left: 0, top: 0, bottom: 0, width: 5,
+                                cursor: 'col-resize', zIndex: 10,
+                                background: 'transparent',
+                                transition: 'background 0.15s',
+                            }}
+                            onMouseEnter={e => (e.currentTarget.style.background = 'var(--pwc-orange-border)')}
+                            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                        />
 
                         {/* Drawer header */}
                         <div style={{ padding: '18px 20px 14px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)', flexShrink: 0 }}>
@@ -716,7 +811,7 @@ export default function KQLExplorer() {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                                     <div style={{ padding: '14px 16px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 10, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
                                         <FontAwesomeIcon icon={faCircleInfo} style={{ color: 'var(--info)', marginRight: 7 }} />
-                                        AI will sample up to <strong>{logs ? Math.min(10, logs.row_count) : 0} rows</strong> from <code style={{ fontFamily: 'monospace' }}>{expanded}</code>, analyse the log structure, generate a KQL parser, run it, and auto-fix any errors — all automatically.
+                                        AI will sample up to <strong>{logs ? Math.min(20, logs.row_count) : 0} rows</strong> from <code style={{ fontFamily: 'monospace' }}>{expanded}</code>, analyse the log structure, generate a KQL parser, run it, and auto-fix any errors — all automatically.
                                     </div>
                                     <button
                                         className="btn btn-primary"
@@ -847,19 +942,46 @@ export default function KQLExplorer() {
                                             {runResult.row_count === 0 ? (
                                                 <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '10px 0', fontStyle: 'italic' }}>Parser returned no rows</div>
                                             ) : (
-                                                <div className="data-table-wrap" style={{ maxHeight: 240, overflow: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
+                                                <div className="data-table-wrap" style={{ maxHeight: 320, overflow: 'auto', borderRadius: 8, border: '1px solid var(--border)' }}>
                                                     <table className="data-table" style={{ fontSize: 11 }}>
-                                                        <thead><tr>{runResult.columns.map(c => <th key={c} style={{ padding: '7px 10px' }}>{c}</th>)}</tr></thead>
+                                                        <thead>
+                                                            <tr>
+                                                                <th style={{ padding: '7px 8px', width: 24 }} />
+                                                                {runResult.columns.map(c => <th key={c} style={{ padding: '7px 10px' }}>{c}</th>)}
+                                                            </tr>
+                                                        </thead>
                                                         <tbody>
                                                             {runResult.rows.map((row, i) => (
-                                                                <tr key={i}>
-                                                                    {runResult.columns.map(c => (
-                                                                        <td key={c} title={String(row[c] ?? '')}
-                                                                            style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '6px 10px' }}>
-                                                                            {String(row[c] ?? '')}
+                                                                <Fragment key={i}>
+                                                                    <tr onClick={() => toggleRunRow(i)} style={{ cursor: 'pointer' }}>
+                                                                        <td style={{ padding: '6px 8px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                                                            <FontAwesomeIcon icon={expRunRows.has(i) ? faChevronDown : faChevronRight} style={{ fontSize: 9 }} />
                                                                         </td>
-                                                                    ))}
-                                                                </tr>
+                                                                        {runResult.columns.map(c => (
+                                                                            <td key={c} title={String(row[c] ?? '')}
+                                                                                style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '6px 10px' }}>
+                                                                                {String(row[c] ?? '')}
+                                                                            </td>
+                                                                        ))}
+                                                                    </tr>
+                                                                    {expRunRows.has(i) && (
+                                                                        <tr>
+                                                                            <td colSpan={runResult.columns.length + 1} style={{ padding: '0 8px 10px 32px', background: 'rgba(0,0,0,0.02)' }}>
+                                                                                <pre style={{
+                                                                                    margin: 0, padding: '10px 12px',
+                                                                                    background: '#f6f8fa', color: '#24292e',
+                                                                                    border: '1px solid var(--border)',
+                                                                                    borderRadius: 6, fontSize: 10.5,
+                                                                                    fontFamily: '"JetBrains Mono", Consolas, monospace',
+                                                                                    whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                                                                                    maxHeight: 260, overflow: 'auto', lineHeight: 1.65,
+                                                                                }}>
+                                                                                    {JSON.stringify(row, null, 2)}
+                                                                                </pre>
+                                                                            </td>
+                                                                        </tr>
+                                                                    )}
+                                                                </Fragment>
                                                             ))}
                                                         </tbody>
                                                     </table>
