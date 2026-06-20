@@ -269,10 +269,20 @@ class ParserRunRequest(BaseModel):
     sample_logs: list[dict]
     columns: list[str]
     days: int = 1
+    user_request: str = ""
 
 
 class RunWithFixRequest(BaseModel):
     query: str
+    days: int = 1
+
+
+class ParserChatRequest(BaseModel):
+    table: str
+    columns: list[str]
+    sample_logs: list[dict] = []
+    current_query: str
+    message: str
     days: int = 1
 
 
@@ -383,66 +393,17 @@ async def get_table_logs(req: TableLogsRequest):
         raise HTTPException(status_code=502, detail=str(e))
 
 
-_PARSER_SYSTEM = """\
-You are an expert Microsoft Sentinel / Azure Log Analytics KQL engineer specialising in log parsers.
-Your goal is to create a PRODUCTION-QUALITY, maximally-complete KQL parser from the sample data provided.
-
-═══ STEP 1 — DEEPLY ANALYSE every column ═══
-Before writing a single KQL token, study each column and identify:
-• Embedded structured data: JSON objects/arrays, XML, CEF (key=value extension), LEEF, syslog RFC3164/RFC5424, Windows Event XML, pipe/comma/tab-delimited values
-• Columns containing IP addresses, URLs, UPNs, email addresses, file paths, hostnames, GUIDs, hash values
-• Enum-like columns (limited distinct values) that should be mapped to ASIM standard vocabulary
-• Timestamp strings in non-standard formats that need todatetime() conversion
-• Numeric strings that need toint() / tolong() conversion
-
-═══ STEP 2 — EXTRACT every useful field ═══
-• JSON fields: use parse_json() then project sub-fields with dot notation or todynamic(); handle nested objects
-• CEF/LEEF extension strings: use extract() or parse_csv() to pull all key=value pairs into named columns
-• Syslog RFC3164/5424: extract facility, severity, hostname, appname, procid, msgid, message body, structured-data elements
-• Windows Event XML: use extract() with XPath-style regex patterns
-• Key=value strings: use parse_csv() or a series of extract() calls
-• Multi-value fields (comma-separated arrays): use split() and mv-expand where needed
-
-═══ STEP 3 — MAP to ASIM schema ═══
-Map every extracted field to the correct ASIM name:
-  Actors/Users : ActorUsername, ActorUserId, ActorUserType, TargetUsername, TargetUserId
-  Networks     : SrcIpAddr, DstIpAddr, SrcPortNumber, DstPortNumber, NetworkProtocol, NetworkApplicationProtocol, NetworkDirection
-  Hosts        : SrcHostname, DstHostname, DvcHostname, DvcDomain, DvcIpAddr
-  Files        : TargetFilePath, TargetFileName, TargetFileExtension, TargetFileMD5, TargetFileSHA256
-  Processes    : ActingProcessName, ActingProcessId, ActingProcessCommandLine, TargetProcessName, TargetProcessId
-  Auth         : LogonType, AuthenticationMethod, LogonProtocol
-  Web/HTTP     : HttpRequestMethod, HttpStatusCode, UrlOriginal, HttpUserAgent, HttpReferrer
-  Events       : EventType, EventResult ("Success"/"Failure"), EventResultDetails, EventSeverity ("Informational"/"Low"/"Medium"/"High"/"Critical"), EventMessage, EventOriginalUid, EventVendor, EventProduct, EventSchemaVersion
-
-═══ STEP 4 — TYPE-CAST every field ═══
-• tostring()   for all string-valued fields extracted from dynamic/JSON
-• toint()      for ports, error codes, HTTP status codes, PIDs, counts
-• tolong()     for large numeric IDs, timestamps-as-epoch
-• todatetime() for ISO/epoch timestamp strings
-• tobool()     for boolean-like strings ("true"/"false", "yes"/"no")
-• Do NOT leave any extracted field as dynamic/untyped in the final projection
-
-═══ STEP 5 — ENRICHMENT / COMPUTED fields ═══
-Add these where the underlying data supports it:
-• EventResult       — derive "Success"/"Failure" from result codes, status strings, or boolean flags
-• DvcAction         — "Allow"/"Deny"/"Block"/"Drop" from action fields
-• EventSeverity     — normalise vendor severity strings to the ASIM vocabulary
-• ActorUsernameSplit — strip domain prefix (split(ActorUsername,"\\\\")[-1] or UPN local-part)
-• Geo hints         — note if SrcIpAddr / DstIpAddr exist (caller can add geo_info_from_ip_address())
-
-═══ STEP 6 — PARSER STRUCTURE ═══
-• First line: the table name (no leading whitespace)
-• Use | extend for ALL field extraction and computation (never project first)
-• Parse expensive string columns (JSON, regex) once with let or extend, reuse the variable
-• Final line: | project TimeGenerated, <every ASIM field you populated>, <original fields not yet covered>
-• Do NOT include | take, | limit, or any row-reducing operator in the parser body
-• Each pipe operator on its own line with a single leading space
-• Use //-style inline comments ONLY for non-obvious regex patterns
-
-Function alias: snake_case, product-specific (e.g. parse_aad_pim_audit, parse_cisco_asa_syslog, parse_windows_security_events)
-
-CRITICAL: Reply ONLY with valid JSON — no markdown, no code fences, no explanation outside the JSON:
-{"parser_query": "<full KQL starting with the table name; use \\n between each pipe operator>", "function_alias": "<snake_case_alias>", "explanation": "<3-4 sentences: what product/table this covers, what embedded structures are parsed, what ASIM schema it maps to, and what security use cases it enables>"}"""
+_PARSER_SYSTEM = (
+    "You are an expert Microsoft Sentinel / Azure Log Analytics KQL engineer.\n"
+    "Analyze the sample log data and create a KQL parser that:\n"
+    "1. Extracts and normalises key fields using ASIM naming conventions where applicable\n"
+    "2. Parses structured data (JSON, XML, CSV) embedded in string fields\n"
+    "3. Adds computed / enrichment fields useful for security analysis\n\n"
+    "CRITICAL: Reply ONLY with valid JSON — no markdown, no code fences:\n"
+    '{"parser_query": "<full KQL starting with the table name, \\n between pipe operators>", '
+    '"function_alias": "<snake_case_alias>", '
+    '"explanation": "<2-3 sentences on what the parser does>"}'
+)
 
 
 @router.post("/create-parser")
@@ -555,34 +516,19 @@ async def parser_run(req: ParserRunRequest):
             yield _sse({"type": "done", "success": False, "error": "LLM not configured — add AZURE_ANTHROPIC_API_KEY to .env"})
             return
 
-        sample_rows = req.sample_logs[:20]
-        sample_str = _json.dumps(sample_rows, indent=2, default=str)
-
-        # Build per-column value samples so the LLM sees actual data patterns
-        col_samples: dict[str, list[str]] = {}
-        for row in sample_rows:
-            for col, val in row.items():
-                sv = str(val) if val is not None else ""
-                if sv and sv not in col_samples.get(col, []):
-                    col_samples.setdefault(col, [])
-                    if len(col_samples[col]) < 3:
-                        col_samples[col].append(sv[:300])
-        col_hints = "\n".join(
-            f"  {col}: {' | '.join(repr(v) for v in vals)}"
-            for col, vals in col_samples.items() if vals
+        sample_str = _json.dumps(req.sample_logs[:10], indent=2, default=str)
+        user_instruction = (
+            f"\n\nSpecific user requirement: {req.user_request.strip()}"
+            if req.user_request.strip() else ""
         )
-
         prompt = (
             f"Table: {req.table}\n"
-            f"Columns ({len(req.columns)}): {', '.join(req.columns)}\n\n"
-            f"Column value samples (up to 3 distinct values per column):\n{col_hints}\n\n"
-            f"Full sample logs ({len(sample_rows)} rows):\n{sample_str}\n\n"
-            "Study every column carefully. Identify ALL embedded structured data (JSON, CEF, syslog, XML, "
-            "key=value pairs). Extract and normalise every useful field. "
-            "Create the most complete, production-ready KQL parser possible for this table."
+            f"Columns: {', '.join(req.columns)}\n\n"
+            f"Sample logs (up to 10 rows):\n{sample_str}\n\n"
+            f"Create a KQL parser for this table that extracts and normalises the key fields.{user_instruction}"
         )
         yield _sse({"type": "step", "label": "Analysing table schema and sample logs", "status": "done",
-                    "detail": f"{len(sample_rows)} sample rows examined, {len(req.columns)} columns"})
+                    "detail": f"{min(len(req.sample_logs), 10)} sample rows examined, {len(req.columns)} columns"})
 
         # Step 2 — generate parser
         yield _sse({"type": "step", "label": "Drafting KQL parser with ASIM normalisation", "status": "running"})
@@ -640,11 +586,8 @@ async def parser_run(req: ParserRunRequest):
                 fix_prompt = (
                     f"Fix the following KQL parser query that failed.\n\n"
                     f"TABLE: {req.table}\n"
-                    f"COLUMNS: {', '.join(req.columns)}\n\n"
                     f"FAILED QUERY:\n{parser_query}\n\n"
-                    f"ERROR:\n{error_str}\n\n"
-                    "Correct only the syntax/type error(s). Preserve all field extraction and ASIM mapping logic. "
-                    "Return the full corrected query."
+                    f"ERROR:\n{error_str}"
                 )
                 try:
                     fix_result = await _llm_complete(_KQL_FIX_SYSTEM, fix_prompt)
@@ -663,6 +606,132 @@ async def parser_run(req: ParserRunRequest):
                     # don't abort — outer loop retries with the (possibly unchanged) query
 
         yield _sse({"type": "done", "success": False, "error": "Max retries exceeded"})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+_PARSER_CHAT_SYSTEM = """\
+You are an expert Microsoft Sentinel / Azure Log Analytics KQL engineer in an interactive parser-refinement chat.
+
+The user has a KQL parser for a specific table and wants to modify or extend it via conversation.
+
+YOUR JOB:
+1. Read the user's instruction carefully.
+2. Apply ONLY what the user asked — preserve every existing extract / extend / project step unless the user explicitly asks to remove or change it.
+3. If the user asks a factual question (e.g. "what fields does this extract?"), answer it clearly AND return the unchanged parser.
+4. If the instruction is ambiguous, make the most reasonable interpretation and note it in the explanation.
+
+MODIFICATION RULES:
+• Start with the table name, each pipe on its own line
+• Add new | extend steps for new field extractions — do not rewrite existing ones unless fixing a bug
+• Type-cast every newly extracted field (tostring, toint, todatetime, tobool …)
+• Keep all ASIM field names already present; map any new fields to ASIM where a standard name exists
+• Update | project at the end to include any newly added fields
+• Never add | take or | limit to the parser body
+
+CRITICAL: Reply ONLY with valid JSON — no markdown, no code fences:
+{"parser_query": "<complete updated KQL starting with table name; \\n between pipe operators>", \
+"explanation": "<one sentence: what specifically changed>", \
+"answer": "<answer to any factual question the user asked, or empty string>"}"""
+
+
+@router.post("/parser-chat")
+async def parser_chat(req: ParserChatRequest):
+    """Chat-driven parser refinement. Modifies the current parser per user instruction and re-runs it."""
+
+    async def event_gen():
+        yield _sse({"type": "step", "label": "Processing your request…", "status": "running"})
+        await asyncio.sleep(0.04)
+
+        status = get_llm_status()
+        if not status.get("available"):
+            yield _sse({"type": "step", "label": "Processing your request…", "status": "error",
+                        "detail": "LLM not configured"})
+            yield _sse({"type": "done", "success": False, "error": "LLM not configured"})
+            return
+
+        sample_str = _json.dumps(req.sample_logs[:10], indent=2, default=str) if req.sample_logs else "(no samples)"
+        user_prompt = (
+            f"Table: {req.table}\n"
+            f"Columns: {', '.join(req.columns)}\n\n"
+            f"Sample logs (up to 10 rows):\n{sample_str}\n\n"
+            f"Current parser:\n{req.current_query}\n\n"
+            f"User instruction: {req.message}"
+        )
+
+        try:
+            result = await _llm_complete(_PARSER_CHAT_SYSTEM, user_prompt)
+            obj = _parse_llm_json(result["text"])
+            new_query  = obj.get("parser_query", "").replace("\\n", "\n").strip()
+            explanation = obj.get("explanation", "Updated")
+            answer      = obj.get("answer", "")
+        except Exception as e:
+            yield _sse({"type": "step", "label": "Processing your request…", "status": "error",
+                        "detail": str(e)[:200]})
+            yield _sse({"type": "done", "success": False, "error": f"Chat failed: {e}"})
+            return
+
+        yield _sse({"type": "step", "label": "Processing your request…", "status": "done",
+                    "detail": explanation})
+
+        if answer:
+            yield _sse({"type": "answer", "text": answer})
+
+        if not new_query:
+            yield _sse({"type": "done", "success": True})
+            return
+
+        yield _sse({"type": "query", "query": new_query, "alias": "", "explanation": explanation})
+
+        # Auto-run the updated parser (up to 3 attempts with auto-fix)
+        for attempt in range(1, 4):
+            run_label = "Running updated parser" if attempt == 1 else f"Auto-fixing and retrying (attempt {attempt})"
+            yield _sse({"type": "step", "label": run_label, "status": "running"})
+            await asyncio.sleep(0.04)
+
+            try:
+                run_result = await sentinel_svc.run_kql(new_query, None, req.days)
+                row_count = run_result.get("row_count", 0)
+                col_count = len(run_result.get("columns", []))
+                yield _sse({"type": "step", "label": run_label, "status": "done",
+                            "detail": f"{row_count} rows · {col_count} columns"})
+                yield _sse({"type": "result", "data": run_result})
+                yield _sse({"type": "done", "success": True})
+                return
+
+            except (RuntimeError, ValueError) as e:
+                error_str = str(e)
+                yield _sse({"type": "step", "label": run_label, "status": "error",
+                            "detail": error_str[:280]})
+
+                if attempt >= 3:
+                    yield _sse({"type": "done", "success": True})
+                    return
+
+                fix_prompt = (
+                    f"Fix the following KQL parser query that failed.\n\n"
+                    f"TABLE: {req.table}\nCOLUMNS: {', '.join(req.columns)}\n\n"
+                    f"FAILED QUERY:\n{new_query}\n\nERROR:\n{error_str}\n\n"
+                    "Correct only the syntax/type error. Preserve all field extraction logic."
+                )
+                try:
+                    fix_result = await _llm_complete(_KQL_FIX_SYSTEM, fix_prompt)
+                    fixed_query, fix_note = _extract_fix_from_response(fix_result["text"])
+                except Exception:
+                    fixed_query, fix_note = "", ""
+
+                if fixed_query and fixed_query != new_query:
+                    new_query = fixed_query
+                    yield _sse({"type": "query", "query": new_query, "alias": "", "explanation": fix_note})
+                else:
+                    yield _sse({"type": "done", "success": True})
+                    return
+
+        yield _sse({"type": "done", "success": True})
 
     return StreamingResponse(
         event_gen(),

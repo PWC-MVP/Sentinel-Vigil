@@ -4,16 +4,16 @@ import {
     faDatabase, faSpinner, faRefresh, faChevronRight, faChevronDown,
     faSearch, faArrowUp, faArrowDown, faXmark, faRobot,
     faCode, faPlay, faCheckCircle, faTriangleExclamation,
-    faCircleInfo, faTable, faPlus, faFilter, faWrench, faClock,
+    faCircleInfo, faTable, faPlus, faFilter, faWrench, faClock, faPaperPlane,
 } from '@fortawesome/free-solid-svg-icons';
 import { http as axios } from '../api/client';
 
 const TIME_OPTIONS = [
-    { value: '1h',  label: 'Last 1 hour'  },
-    { value: '4h',  label: 'Last 4 hours' },
+    { value: '1h', label: 'Last 1 hour' },
+    { value: '4h', label: 'Last 4 hours' },
     { value: '12h', label: 'Last 12 hours' },
     { value: '24h', label: 'Last 24 hours' },
-    { value: '7d',  label: 'Last 7 days'  },
+    { value: '7d', label: 'Last 7 days' },
     { value: '30d', label: 'Last 30 days' },
 ];
 
@@ -21,55 +21,65 @@ const TIME_TO_DAYS: Record<string, number> = {
     '1h': 1, '4h': 1, '12h': 1, '24h': 1, '7d': 7, '30d': 30,
 };
 
-interface TableInfo  { DataType: string; SizeMB?: number; Columns?: number; Custom?: boolean; }
-interface LogResult  { columns: string[]; rows: Record<string, unknown>[]; row_count: number; }
-interface ColFilter  { column: string; value: string; }
+interface TableInfo { DataType: string; SizeMB?: number; Columns?: number; Custom?: boolean; }
+interface ChatMessage { role: 'user' | 'assistant'; content: string; }
+interface LogResult { columns: string[]; rows: Record<string, unknown>[]; row_count: number; }
+interface ColFilter { column: string; value: string; }
 interface ParserStep { label: string; status: 'running' | 'done' | 'error'; detail?: string; }
-interface FnParam    { type: string; name: string; defaultValue: string; }
+interface FnParam { type: string; name: string; defaultValue: string; }
 
 const KQL_TYPES = ['string', 'int', 'long', 'real', 'bool', 'datetime', 'timespan', 'dynamic'];
 
 export default function KQLExplorer() {
     // ── tables ──────────────────────────────────────────────────
-    const [tables,       setTables]      = useState<TableInfo[]>([]);
-    const [tabLoading,   setTabLoading]  = useState(false);
-    const [tabError,     setTabError]    = useState<string | null>(null);
-    const [tableSearch,  setTableSearch] = useState('');
-    const [customOnly,   setCustomOnly]  = useState(false);
-    const [hideEmpty,    setHideEmpty]   = useState(true);
-    const [timeRange,    setTimeRange]   = useState('24h');
+    const [tables, setTables] = useState<TableInfo[]>([]);
+    const [tabLoading, setTabLoading] = useState(false);
+    const [tabError, setTabError] = useState<string | null>(null);
+    const [tableSearch, setTableSearch] = useState('');
+    const [customOnly, setCustomOnly] = useState(false);
+    const [hideEmpty, setHideEmpty] = useState(true);
+    const [timeRange, setTimeRange] = useState('24h');
 
     // ── expanded table + logs ────────────────────────────────────
-    const [expanded,    setExpanded]   = useState<string | null>(null);
-    const [logs,        setLogs]       = useState<LogResult | null>(null);
-    const [logsLoading, setLogsLoad]   = useState(false);
-    const [logsError,   setLogsError]  = useState<string | null>(null);
+    const [expanded, setExpanded] = useState<string | null>(null);
+    const [logs, setLogs] = useState<LogResult | null>(null);
+    const [logsLoading, setLogsLoad] = useState(false);
+    const [logsError, setLogsError] = useState<string | null>(null);
 
     // ── log filters ──────────────────────────────────────────────
-    const [globSearch,  setGlobSearch] = useState('');
-    const [colFilters,  setColFilters] = useState<ColFilter[]>([]);
-    const [addingF,     setAddingF]    = useState(false);
-    const [newCol,      setNewCol]     = useState('');
-    const [newVal,      setNewVal]     = useState('');
-    const [sortCol,     setSortCol]    = useState('TimeGenerated');
-    const [sortDesc,    setSortDesc]   = useState(true);
-    const [expRows,     setExpRows]    = useState<Set<number>>(new Set());
+    const [globSearch, setGlobSearch] = useState('');
+    const [colFilters, setColFilters] = useState<ColFilter[]>([]);
+    const [addingF, setAddingF] = useState(false);
+    const [newCol, setNewCol] = useState('');
+    const [newVal, setNewVal] = useState('');
+    const [sortCol, setSortCol] = useState('TimeGenerated');
+    const [sortDesc, setSortDesc] = useState(true);
+    const [expRows, setExpRows] = useState<Set<number>>(new Set());
 
     // ── parser ───────────────────────────────────────────────────
-    const [parserOpen,  setParserOpen] = useState(false);
-    const [parserKQL,   setParserKQL]  = useState('');
-    const [parserAlias, setAlias]      = useState('');
-    const [parserNote,  setNote]       = useState('');
-    const [creating,    setCreating]   = useState(false);
-    const [parserErr,   setParserErr]  = useState<string | null>(null);
+    const [parserOpen, setParserOpen] = useState(false);
+    const [parserKQL, setParserKQL] = useState('');
+    const [parserAlias, setAlias] = useState('');
+    const [parserNote, setNote] = useState('');
+    const [creating, setCreating] = useState(false);
+    const [parserErr, setParserErr] = useState<string | null>(null);
     const [parserSteps, setParserSteps] = useState<ParserStep[]>([]);
-    const [runResult,   setRunResult]  = useState<LogResult | null>(null);
+    const [runResult, setRunResult] = useState<LogResult | null>(null);
     const [parserValid, setParserValid] = useState(false); // true only after a successful run
-    const [running,     setRunning]    = useState(false);
-    const [implementing,setImpl]       = useState(false);
-    const [implSuccess, setImplSucc]   = useState<string | null>(null);
-    const [implError,   setImplErr]    = useState<string | null>(null);
-    const [expRunRows,  setExpRunRows] = useState<Set<number>>(new Set());
+    const [running, setRunning] = useState(false);
+    const [implementing, setImpl] = useState(false);
+    const [implSuccess, setImplSucc] = useState<string | null>(null);
+    const [implError, setImplErr] = useState<string | null>(null);
+    const [expRunRows, setExpRunRows] = useState<Set<number>>(new Set());
+
+    // ── initial parser request ────────────────────────────────────
+    const [parserRequest, setParserRequest] = useState('');
+
+    // ── chat ─────────────────────────────────────────────────────
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+    const [chatInput, setChatInput] = useState('');
+    const [chatLoading, setChatLoad] = useState(false);
+    const chatEndRef = useRef<HTMLDivElement>(null);
 
     const toggleRunRow = (i: number) => setExpRunRows(prev => {
         const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s;
@@ -97,15 +107,16 @@ export default function KQLExplorer() {
     };
 
     // ── save-as-function modal ────────────────────────────────────
-    const [saveModal,    setSaveModal]   = useState(false);
-    const [saveName,     setSaveName]    = useState('');
+    const [saveModal, setSaveModal] = useState(false);
+    const [saveName, setSaveName] = useState('');
     const [saveCategory, setSaveCategory] = useState('Parser');
-    const [saveParams,   setSaveParams]  = useState<FnParam[]>([]);
+    const [saveParams, setSaveParams] = useState<FnParam[]>([]);
 
     useEffect(() => { loadTables(); }, []);
     useEffect(() => {
         if (expanded) fetchLogs(expanded, globSearch, colFilters, sortCol, sortDesc);
     }, [timeRange]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
     // ── API helpers ───────────────────────────────────────────────
 
@@ -145,10 +156,12 @@ export default function KQLExplorer() {
             setExpRows(new Set()); return;
         }
         setExpanded(name); setLogs(null);
-        setParserOpen(false); setParserKQL(''); setAlias(''); setNote('');
+        setParserOpen(true); setParserKQL(''); setAlias(''); setNote('');
+        setParserSteps([]); setParserErr(null);
         setRunResult(null); setGlobSearch(''); setColFilters([]);
         setSortCol('TimeGenerated'); setSortDesc(true); setExpRows(new Set());
         setImplSucc(null); setImplErr(null);
+        setChatMessages([]); setChatInput(''); setParserRequest('');
         await fetchLogs(name, '', [], 'TimeGenerated', true);
     };
 
@@ -183,12 +196,13 @@ export default function KQLExplorer() {
         });
     };
 
-    const parserRun = async () => {
+    const parserRun = async (requestOverride?: string) => {
         if (!logs || !expanded) return;
         setCreating(true); setParserErr(null); setParserValid(false);
         setParserSteps([]); setRunResult(null); setExpRunRows(new Set());
         setParserKQL(''); setAlias(''); setNote('');
         setImplSucc(null); setImplErr(null);
+        setChatMessages([]); setChatInput('');
 
         const upsertStep = (label: string, status: ParserStep['status'], detail?: string) =>
             setParserSteps(prev => {
@@ -204,9 +218,10 @@ export default function KQLExplorer() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     table: expanded,
-                    sample_logs: logs.rows.slice(0, 20),
+                    sample_logs: logs.rows.slice(0, 10),
                     columns: logs.columns,
                     days: TIME_TO_DAYS[timeRange] || 1,
+                    user_request: requestOverride ?? parserRequest,
                 }),
             });
 
@@ -230,9 +245,9 @@ export default function KQLExplorer() {
                     if (!dataLine) continue;
                     try {
                         const evt = JSON.parse(dataLine.slice(6));
-                        if (evt.type === 'step')   upsertStep(evt.label, evt.status, evt.detail);
+                        if (evt.type === 'step') upsertStep(evt.label, evt.status, evt.detail);
                         if (evt.type === 'query') { setParserKQL(evt.query); setAlias(evt.alias); setNote(evt.explanation); }
-                        if (evt.type === 'result')  setRunResult(evt.data);
+                        if (evt.type === 'result') setRunResult(evt.data);
                         if (evt.type === 'done') {
                             if (evt.success) setParserValid(true);
                             else if (evt.error) setParserErr(evt.error);
@@ -279,9 +294,9 @@ export default function KQLExplorer() {
                     if (!dataLine) continue;
                     try {
                         const evt = JSON.parse(dataLine.slice(6));
-                        if (evt.type === 'step')   upsertStep(evt.label, evt.status, evt.detail);
-                        if (evt.type === 'query' && evt.query)  setParserKQL(evt.query);
-                        if (evt.type === 'result')  setRunResult(evt.data);
+                        if (evt.type === 'step') upsertStep(evt.label, evt.status, evt.detail);
+                        if (evt.type === 'query' && evt.query) setParserKQL(evt.query);
+                        if (evt.type === 'result') setRunResult(evt.data);
                         if (evt.type === 'done') {
                             if (evt.success) setParserValid(true);
                             else if (evt.error) setParserErr(evt.error);
@@ -313,14 +328,14 @@ export default function KQLExplorer() {
             .join(', ');
         try {
             const r = await axios.post('/api/kql/save-function', {
-                function_name:        name,
-                display_name:         name,   // same as alias so portal search finds it
-                query:                parserKQL,
-                category:             saveCategory.trim() || 'Parser',
-                function_parameters:  paramStr,
+                function_name: name,
+                display_name: name,   // same as alias so portal search finds it
+                query: parserKQL,
+                category: saveCategory.trim() || 'Parser',
+                function_parameters: paramStr,
             }, { timeout: 30000 });
             const verified: boolean = r.data.verified !== false;
-            const alias: string     = r.data.alias || name;
+            const alias: string = r.data.alias || name;
             setImplSucc(alias);
             setSaveModal(false);
             if (!verified) {
@@ -331,6 +346,81 @@ export default function KQLExplorer() {
             const err = e as { response?: { data?: { detail?: string } }; message?: string };
             setImplErr(err?.response?.data?.detail ?? err?.message ?? 'Failed to implement');
         } finally { setImpl(false); }
+    };
+
+    const sendChat = async () => {
+        if (!chatInput.trim() || !parserKQL || !expanded || chatLoading) return;
+        const userMsg = chatInput.trim();
+        setChatInput('');
+        setChatMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+        setChatLoad(true);
+        setParserErr(null);
+
+        try {
+            const resp = await fetch('/api/kql/parser-chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table: expanded,
+                    columns: logs?.columns ?? [],
+                    sample_logs: logs?.rows.slice(0, 20) ?? [],
+                    current_query: parserKQL,
+                    message: userMsg,
+                    days: TIME_TO_DAYS[timeRange] || 1,
+                }),
+            });
+
+            if (!resp.ok || !resp.body) {
+                const errText = await resp.text();
+                setChatMessages(prev => [...prev, { role: 'assistant', content: errText || 'Request failed' }]);
+                return;
+            }
+
+            const reader = resp.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '';
+            let assistantContent = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buf += decoder.decode(value, { stream: true });
+                const parts = buf.split('\n\n');
+                buf = parts.pop() ?? '';
+                for (const part of parts) {
+                    const dataLine = part.split('\n').find(l => l.startsWith('data: '));
+                    if (!dataLine) continue;
+                    try {
+                        const evt = JSON.parse(dataLine.slice(6));
+                        if (evt.type === 'query' && evt.query) {
+                            setParserKQL(evt.query);
+                            if (evt.explanation) assistantContent = evt.explanation;
+                        }
+                        if (evt.type === 'answer' && evt.text) {
+                            assistantContent = evt.text + (assistantContent ? '\n\n' + assistantContent : '');
+                        }
+                        if (evt.type === 'result') {
+                            setRunResult(evt.data);
+                            setParserValid(true);
+                            setExpRunRows(new Set());
+                        }
+                        if (evt.type === 'done' && !evt.success && evt.error) {
+                            assistantContent = assistantContent || evt.error;
+                        }
+                    } catch { /* ignore malformed SSE */ }
+                }
+            }
+
+            setChatMessages(prev => [...prev, {
+                role: 'assistant',
+                content: assistantContent || 'Parser updated — check the KQL editor above.',
+            }]);
+        } catch (e: unknown) {
+            const err = e as { message?: string };
+            setChatMessages(prev => [...prev, { role: 'assistant', content: err?.message ?? 'Request failed' }]);
+        } finally {
+            setChatLoad(false);
+        }
     };
 
     const filtered = tables.filter(t => {
@@ -663,7 +753,7 @@ export default function KQLExplorer() {
                                         {!logsLoading && logs && (
                                             <>
                                                 <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                                    <span className="badge badge-info"  style={{ fontSize: 10 }}>{logs.row_count.toLocaleString()} rows</span>
+                                                    <span className="badge badge-info" style={{ fontSize: 10 }}>{logs.row_count.toLocaleString()} rows</span>
                                                     <span className="badge badge-muted" style={{ fontSize: 10 }}>{logs.columns.length} cols</span>
                                                     <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Click column headers to sort · Click a row to expand</span>
                                                 </div>
@@ -811,12 +901,80 @@ export default function KQLExplorer() {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                                     <div style={{ padding: '14px 16px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 10, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
                                         <FontAwesomeIcon icon={faCircleInfo} style={{ color: 'var(--info)', marginRight: 7 }} />
-                                        AI will sample up to <strong>{logs ? Math.min(20, logs.row_count) : 0} rows</strong> from <code style={{ fontFamily: 'monospace' }}>{expanded}</code>, analyse the log structure, generate a KQL parser, run it, and auto-fix any errors — all automatically.
+                                        AI will sample up to <strong>{logs ? Math.min(10, logs.row_count) : 0} rows</strong> from <code style={{ fontFamily: 'monospace' }}>{expanded}</code>, analyse the log structure, generate a KQL parser, run it, and auto-fix any errors — all automatically.
                                     </div>
+
+                                    {/* Custom parser request chat input */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                                            Describe what you want to parse <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional)</span>
+                                        </span>
+                                        <div style={{ display: 'flex', gap: 8 }}>
+                                            <input
+                                                className="form-input"
+                                                placeholder='e.g. "Extract IP addresses and map severity from Properties JSON"'
+                                                value={parserRequest}
+                                                onChange={e => setParserRequest(e.target.value)}
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter' && parserRequest.trim() && logs && logs.row_count > 0) {
+                                                        parserRun(parserRequest.trim());
+                                                    }
+                                                }}
+                                                disabled={!logs || logs.row_count === 0}
+                                                style={{ flex: 1, height: 36, fontSize: 12, boxSizing: 'border-box' }}
+                                            />
+                                            <button
+                                                onClick={() => parserRun(parserRequest.trim() || undefined)}
+                                                disabled={!parserRequest.trim() || !logs || logs.row_count === 0}
+                                                title="Send request"
+                                                style={{
+                                                    height: 36, width: 36, borderRadius: 8, flexShrink: 0,
+                                                    border: 'none',
+                                                    cursor: parserRequest.trim() && logs && logs.row_count > 0 ? 'pointer' : 'not-allowed',
+                                                    background: parserRequest.trim() && logs && logs.row_count > 0 ? '#D04A02' : 'var(--border)',
+                                                    color: '#fff',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                    transition: 'background 0.15s',
+                                                }}
+                                            >
+                                                <FontAwesomeIcon icon={faPaperPlane} style={{ fontSize: 12 }} />
+                                            </button>
+                                        </div>
+                                        {[
+                                            'Parse JSON in Properties field',
+                                            'Extract IPs and map to ASIM',
+                                            'Normalise severity to ASIM EventSeverity',
+                                        ].map(s => (
+                                            <button
+                                                key={s}
+                                                onClick={() => setParserRequest(s)}
+                                                style={{
+                                                    alignSelf: 'flex-start',
+                                                    padding: '3px 10px', borderRadius: 20,
+                                                    border: '1px solid var(--border)',
+                                                    background: 'var(--bg-elevated)',
+                                                    fontSize: 11, cursor: 'pointer',
+                                                    color: 'var(--text-secondary)',
+                                                    transition: 'all 0.15s',
+                                                }}
+                                                onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--pwc-orange)'; e.currentTarget.style.color = 'var(--pwc-orange)'; }}
+                                                onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                                            >
+                                                {s}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                                        <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>or auto-generate</span>
+                                        <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                                    </div>
+
                                     <button
                                         className="btn btn-primary"
                                         disabled={!logs || logs.row_count === 0}
-                                        onClick={parserRun}
+                                        onClick={() => parserRun()}
                                         style={{ padding: '12px 20px', fontSize: 13, borderRadius: 8 }}
                                     >
                                         <FontAwesomeIcon icon={faRobot} style={{ marginRight: 10 }} />Generate &amp; Run Parser
@@ -854,17 +1012,17 @@ export default function KQLExplorer() {
                                             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
                                                 <div style={{ width: 16, flexShrink: 0, paddingTop: 1 }}>
                                                     {step.status === 'running' && <FontAwesomeIcon icon={faSpinner} spin style={{ fontSize: 11, color: '#f97316' }} />}
-                                                    {step.status === 'done'    && <FontAwesomeIcon icon={faCheckCircle} style={{ fontSize: 11, color: '#22c55e' }} />}
-                                                    {step.status === 'error'   && <FontAwesomeIcon icon={faTriangleExclamation} style={{ fontSize: 11, color: '#ef4444' }} />}
+                                                    {step.status === 'done' && <FontAwesomeIcon icon={faCheckCircle} style={{ fontSize: 11, color: '#22c55e' }} />}
+                                                    {step.status === 'error' && <FontAwesomeIcon icon={faTriangleExclamation} style={{ fontSize: 11, color: '#ef4444' }} />}
                                                 </div>
                                                 <div style={{ flex: 1, minWidth: 0 }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                                         {isFix && <FontAwesomeIcon icon={faWrench} style={{ fontSize: 9, color: '#9ca3af', flexShrink: 0 }} />}
                                                         <span style={{
                                                             fontSize: 12, lineHeight: 1.4,
-                                                            color: step.status === 'done'  ? '#374151'
-                                                                 : step.status === 'error' ? '#ef4444'
-                                                                 : '#f97316',
+                                                            color: step.status === 'done' ? '#374151'
+                                                                : step.status === 'error' ? '#ef4444'
+                                                                    : '#f97316',
                                                         }}>
                                                             {step.label}
                                                         </span>
@@ -920,7 +1078,7 @@ export default function KQLExplorer() {
 
                                     {/* Action row */}
                                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                                        <button className="btn btn-ghost btn-sm" disabled={creating} onClick={parserRun} style={{ fontSize: 12 }}>
+                                        <button className="btn btn-ghost btn-sm" disabled={creating} onClick={() => parserRun()} style={{ fontSize: 12 }}>
                                             <FontAwesomeIcon icon={faRobot} style={{ marginRight: 6 }} />
                                             {creating ? 'Regenerating…' : 'Regenerate'}
                                         </button>
@@ -936,7 +1094,7 @@ export default function KQLExplorer() {
                                         <div>
                                             <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
                                                 <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Parser Output</span>
-                                                <span className="badge badge-info"  style={{ fontSize: 10 }}>{runResult.row_count} rows</span>
+                                                <span className="badge badge-info" style={{ fontSize: 10 }}>{runResult.row_count} rows</span>
                                                 <span className="badge badge-muted" style={{ fontSize: 10 }}>{runResult.columns.length} cols</span>
                                             </div>
                                             {runResult.row_count === 0 ? (
@@ -990,6 +1148,103 @@ export default function KQLExplorer() {
                                         </div>
                                     )}
                                 </>
+                            )}
+
+                            {/* ── Chat refine section ── */}
+                            {parserKQL && (
+                                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-primary)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 7 }}>
+                                        <FontAwesomeIcon icon={faRobot} style={{ fontSize: 11, color: 'var(--pwc-orange)' }} />
+                                        Refine with Chat
+                                    </div>
+
+                                    {/* Suggested prompts — shown only when no messages yet */}
+                                    {chatMessages.length === 0 && (
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+                                            {[
+                                                'Parse the JSON in the Properties field',
+                                                'Extract IP addresses and map to ASIM',
+                                                'Add EventResult Success/Failure mapping',
+                                                'Explain what this parser extracts',
+                                            ].map(suggestion => (
+                                                <button
+                                                    key={suggestion}
+                                                    onClick={() => { setChatInput(suggestion); }}
+                                                    style={{
+                                                        padding: '4px 10px', borderRadius: 20,
+                                                        border: '1px solid var(--border)',
+                                                        background: 'var(--bg-elevated)',
+                                                        fontSize: 11, cursor: 'pointer',
+                                                        color: 'var(--text-secondary)',
+                                                        transition: 'all 0.15s',
+                                                    }}
+                                                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--pwc-orange)'; e.currentTarget.style.color = 'var(--pwc-orange)'; }}
+                                                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                                                >
+                                                    {suggestion}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    {/* Message history */}
+                                    {chatMessages.length > 0 && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10, maxHeight: 300, overflowY: 'auto' }}>
+                                            {chatMessages.map((msg, i) => (
+                                                <div key={i} style={{
+                                                    padding: '8px 12px', borderRadius: 8,
+                                                    fontSize: 12, lineHeight: 1.65,
+                                                    background: msg.role === 'user' ? 'rgba(208,74,2,0.07)' : '#f8f9fb',
+                                                    border: `1px solid ${msg.role === 'user' ? 'rgba(208,74,2,0.2)' : '#e5e7eb'}`,
+                                                    alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                                                    maxWidth: '92%',
+                                                    color: 'var(--text-primary)',
+                                                    whiteSpace: 'pre-wrap',
+                                                    wordBreak: 'break-word',
+                                                }}>
+                                                    {msg.role === 'assistant' && (
+                                                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--pwc-orange)', display: 'block', marginBottom: 3 }}>AI</span>
+                                                    )}
+                                                    {msg.content}
+                                                </div>
+                                            ))}
+                                            {chatLoading && (
+                                                <div style={{ padding: '8px 12px', borderRadius: 8, fontSize: 12, background: '#f8f9fb', border: '1px solid #e5e7eb', alignSelf: 'flex-start', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 7 }}>
+                                                    <FontAwesomeIcon icon={faSpinner} spin style={{ fontSize: 10 }} />
+                                                    Thinking…
+                                                </div>
+                                            )}
+                                            <div ref={chatEndRef} />
+                                        </div>
+                                    )}
+
+                                    {/* Input row */}
+                                    <div style={{ display: 'flex', gap: 8 }}>
+                                        <input
+                                            className="form-input"
+                                            placeholder='e.g. "Parse the IP from Properties JSON"'
+                                            value={chatInput}
+                                            onChange={e => setChatInput(e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter' && !chatLoading) sendChat(); }}
+                                            disabled={chatLoading}
+                                            style={{ flex: 1, height: 36, fontSize: 12, boxSizing: 'border-box' }}
+                                        />
+                                        <button
+                                            onClick={sendChat}
+                                            disabled={chatLoading || !chatInput.trim()}
+                                            style={{
+                                                height: 36, width: 36, borderRadius: 8, flexShrink: 0,
+                                                border: 'none', cursor: chatInput.trim() && !chatLoading ? 'pointer' : 'not-allowed',
+                                                background: chatInput.trim() && !chatLoading ? '#D04A02' : 'var(--border)',
+                                                color: '#fff',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                transition: 'background 0.15s',
+                                            }}
+                                        >
+                                            <FontAwesomeIcon icon={chatLoading ? faSpinner : faPaperPlane} spin={chatLoading} style={{ fontSize: 12 }} />
+                                        </button>
+                                    </div>
+                                </div>
                             )}
                         </div>
 
