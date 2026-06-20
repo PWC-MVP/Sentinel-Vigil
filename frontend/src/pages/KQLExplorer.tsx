@@ -362,9 +362,9 @@ export default function KQLExplorer() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     table: expanded,
-                    columns: logs?.columns ?? [],
-                    sample_logs: logs?.rows.slice(0, 20) ?? [],
-                    current_query: parserKQL,
+                    columns: (logs?.columns ?? []).slice(0, 30),
+                    sample_logs: logs?.rows.slice(0, 5) ?? [],
+                    current_query: parserKQL.slice(0, 6000),
                     message: userMsg,
                     days: TIME_TO_DAYS[timeRange] || 1,
                 }),
@@ -405,7 +405,17 @@ export default function KQLExplorer() {
                             setExpRunRows(new Set());
                         }
                         if (evt.type === 'done' && !evt.success && evt.error) {
-                            assistantContent = assistantContent || evt.error;
+                            const raw: string = evt.error;
+                            let friendly = raw;
+                            if (/getaddrinfo|network error|connecterror|connection refused/i.test(raw))
+                                friendly = 'Could not reach the AI service — check your network connection or Azure endpoint configuration.';
+                            else if (/empty response|code fence/i.test(raw))
+                                friendly = 'The AI returned an empty response. Please try again.';
+                            else if (/rate.?limit|429/i.test(raw))
+                                friendly = 'AI service rate limit reached. Please wait a moment and try again.';
+                            else if (/LLM not configured/i.test(raw))
+                                friendly = 'AI service is not configured. Add AZURE_ANTHROPIC_API_KEY or ANTHROPIC_API_KEY to .env.';
+                            assistantContent = assistantContent || friendly;
                         }
                     } catch { /* ignore malformed SSE */ }
                 }

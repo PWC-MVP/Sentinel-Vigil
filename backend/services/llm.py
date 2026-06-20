@@ -35,6 +35,16 @@ def _is_deployment_not_found(err: str) -> bool:
     """True when Azure returned a 404 because the model deployment doesn't exist."""
     return "DEPLOYMENT_NOT_FOUND" in err or "DeploymentNotFound" in err
 
+
+def _is_network_error(err: str) -> bool:
+    """True when the Azure endpoint is unreachable (DNS, connection refused, etc.)"""
+    low = err.lower()
+    return any(kw in low for kw in (
+        "getaddrinfo", "name or service not known", "connection refused",
+        "connecterror", "connect error", "network is unreachable",
+        "failed to establish", "remotedisconnected",
+    ))
+
 SYSTEM_PROMPT = """You are ARIA (Advanced Risk Intelligence Assistant), a elite Tier-3 Cyber Security Analyst built for the PwC Sentinel Engineering Team.
 
 Your goal is to provide deep, actionable insights into security telemetry from Microsoft Sentinel and Microsoft Graph.
@@ -296,9 +306,14 @@ async def complete(system: str, user_msg: str, model: str | None = None) -> dict
         try:
             return await _complete_anthropic(system, user_msg, model=model)
         except RuntimeError as e:
-            # If Azure says the model deployment doesn't exist, retry via direct Anthropic API
-            if _is_deployment_not_found(str(e)) and c["anthropic_direct_key"]:
-                logger.warning("Azure deployment not found for model '%s', retrying via direct Anthropic API", model)
+            err_str = str(e)
+            should_fallback = (
+                _is_deployment_not_found(err_str) or _is_network_error(err_str)
+            ) and c["anthropic_direct_key"]
+            if should_fallback:
+                logger.warning(
+                    "Azure Anthropic unavailable (%s), retrying via direct Anthropic API", err_str[:120]
+                )
                 return await _complete_anthropic_direct(system, user_msg, model=model)
             raise
     if c["anthropic_direct_key"]:
@@ -337,81 +352,90 @@ async def _complete_anthropic(system: str, user_msg: str, model: str | None = No
             "max_tokens": max_tok,
             "stream": False,
         }
-        async with httpx.AsyncClient() as client:
-            r = await client.post(url, json=payload, headers=headers, timeout=180.0)
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(url, json=payload, headers=headers, timeout=180.0)
+        except httpx.TransportError as _te:
+            # Wrap as RuntimeError so the network-error fallback in complete() can catch it
+            raise RuntimeError(f"Network error reaching Azure Anthropic: {_te}") from _te
 
-            if r.status_code in (400, 422):
-                try:
-                    err_body = r.json()
-                    last_err = (
-                        err_body.get("error", {}).get("message")
-                        or str(err_body)
-                    )[:500]
-                except Exception:
-                    last_err = r.text[:500]
-                low = last_err.lower()
-                if any(kw in low for kw in ("max_tokens", "maximum", "too large", "token")):
-                    logger.warning("Anthropic: max_tokens=%d rejected (%s), retrying lower", max_tok, last_err)
-                    continue
-                raise RuntimeError(f"Anthropic API {r.status_code}: {last_err}")
-
-            if r.status_code != 200:
+        if r.status_code in (400, 422):
+            try:
+                err_body = r.json()
+                last_err = (
+                    err_body.get("error", {}).get("message")
+                    or str(err_body)
+                )[:500]
+            except Exception:
                 last_err = r.text[:500]
-                raise RuntimeError(f"Anthropic API {r.status_code}: {last_err}")
+            low = last_err.lower()
+            if any(kw in low for kw in ("max_tokens", "maximum", "too large", "token")):
+                logger.warning("Anthropic: max_tokens=%d rejected (%s), retrying lower", max_tok, last_err)
+                continue
+            raise RuntimeError(f"Anthropic API {r.status_code}: {last_err}")
 
-            data = r.json()
+        if r.status_code != 200:
+            last_err = r.text[:500]
+            raise RuntimeError(f"Anthropic API {r.status_code}: {last_err}")
 
-            # Azure sometimes wraps errors inside a 200 response
-            if data.get("type") == "error":
-                raise RuntimeError(
-                    f"Anthropic error: {data.get('error', {}).get('message', str(data))}"
-                )
+        data = r.json()
 
-            usage    = data.get("usage", {})
-            text     = data["content"][0]["text"]
-            stop_why = data.get("stop_reason", "")
-            total_in  = usage.get("input_tokens", 0)
-            total_out = usage.get("output_tokens", 0)
-            logger.info("Anthropic: max_tokens=%d used=%d stop=%s", max_tok, total_out, stop_why)
+        # Azure sometimes wraps errors inside a 200 response
+        if data.get("type") == "error":
+            raise RuntimeError(
+                f"Anthropic error: {data.get('error', {}).get('message', str(data))}"
+            )
 
-            # Continuation loop — re-call up to 3 times if the model was cut off
-            for _pass in range(3):
-                if stop_why != "max_tokens" or not text:
-                    break
-                logger.info("Anthropic: truncated at pass %d, continuing…", _pass + 1)
-                cont_payload = {
-                    "model":      anthropic_model,
-                    "messages":   [
-                        {"role": "user",      "content": user_msg},
-                        {"role": "assistant", "content": text},
-                        {"role": "user",      "content":
-                            "Continue the report exactly where it was cut off. "
-                            "Do not add any preamble, heading, or repetition — "
-                            "just resume writing from the last incomplete sentence or section."},
-                    ],
-                    "system":     system,
-                    "max_tokens": max_tok,
-                    "stream":     False,
-                }
+        usage    = data.get("usage", {})
+        content  = data.get("content", [])
+        text     = content[0]["text"] if content else ""
+        stop_why = data.get("stop_reason", "")
+        total_in  = usage.get("input_tokens", 0)
+        total_out = usage.get("output_tokens", 0)
+        logger.info("Anthropic: max_tokens=%d used=%d stop=%s", max_tok, total_out, stop_why)
+
+        # Continuation loop — re-call up to 3 times if the model was cut off
+        for _pass in range(3):
+            if stop_why != "max_tokens" or not text:
+                break
+            logger.info("Anthropic: truncated at pass %d, continuing…", _pass + 1)
+            cont_payload = {
+                "model":      anthropic_model,
+                "messages":   [
+                    {"role": "user",      "content": user_msg},
+                    {"role": "assistant", "content": text},
+                    {"role": "user",      "content":
+                        "Continue the report exactly where it was cut off. "
+                        "Do not add any preamble, heading, or repetition — "
+                        "just resume writing from the last incomplete sentence or section."},
+                ],
+                "system":     system,
+                "max_tokens": max_tok,
+                "stream":     False,
+            }
+            try:
                 async with httpx.AsyncClient() as cont_client:
                     cr = await cont_client.post(url, json=cont_payload, headers=headers, timeout=180.0)
-                    if cr.status_code != 200:
-                        logger.warning("Anthropic continuation %d failed: %s", _pass + 1, cr.text[:200])
-                        break
-                    cd       = cr.json()
-                    cu       = cd.get("usage", {})
-                    text    += cd["content"][0]["text"]
-                    stop_why = cd.get("stop_reason", "")
-                    total_out += cu.get("output_tokens", 0)
+            except httpx.TransportError:
+                break
+            if cr.status_code != 200:
+                logger.warning("Anthropic continuation %d failed: %s", _pass + 1, cr.text[:200])
+                break
+            cd       = cr.json()
+            cu       = cd.get("usage", {})
+            cont_content = cd.get("content", [])
+            text    += cont_content[0]["text"] if cont_content else ""
+            stop_why = cd.get("stop_reason", "")
+            total_out += cu.get("output_tokens", 0)
 
-            return {
-                "text": text,
-                "usage": {
-                    "input_tokens":  total_in,
-                    "output_tokens": total_out,
-                    "model":         anthropic_model,
-                },
-            }
+        return {
+            "text": text,
+            "usage": {
+                "input_tokens":  total_in,
+                "output_tokens": total_out,
+                "model":         anthropic_model,
+            },
+        }
 
     raise RuntimeError(f"Anthropic API rejected all max_tokens budgets. Last error: {last_err}")
 

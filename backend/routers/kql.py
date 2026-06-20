@@ -59,12 +59,17 @@ def _sse(obj: dict) -> str:
 def _parse_llm_json(text: str) -> dict:
     """Strip code fences and parse JSON from LLM response."""
     s = text.strip()
+    if not s:
+        raise ValueError("LLM returned an empty response — the AI service may be unavailable or rate-limited")
     for fence in ("```json", "```"):
         if s.startswith(fence):
             s = s[len(fence):]
     if s.endswith("```"):
         s = s[:-3]
-    return _json.loads(s.strip())
+    s = s.strip()
+    if not s:
+        raise ValueError("LLM response contained only a code fence with no content")
+    return _json.loads(s)
 
 
 def _extract_fix_from_response(text: str) -> tuple[str, str]:
@@ -654,25 +659,51 @@ async def parser_chat(req: ParserChatRequest):
             yield _sse({"type": "done", "success": False, "error": "LLM not configured"})
             return
 
-        sample_str = _json.dumps(req.sample_logs[:10], indent=2, default=str) if req.sample_logs else "(no samples)"
+        # Truncate sample log values to avoid blowing the context window.
+        # AuditLogs / large tables can have 50+ columns with long JSON strings per cell.
+        def _truncate_row(row: dict, max_val: int = 300) -> dict:
+            return {k: (str(v)[:max_val] + "…" if len(str(v)) > max_val else v)
+                    for k, v in row.items()}
+
+        trimmed_logs = [_truncate_row(r) for r in req.sample_logs[:5]]
+        sample_str = _json.dumps(trimmed_logs, indent=2, default=str) if trimmed_logs else "(no samples)"
+
+        # Truncate a very long parser so it doesn't dominate the prompt
+        parser_text = req.current_query
+        if len(parser_text) > 4000:
+            parser_text = parser_text[:4000] + "\n// … (truncated for context)"
+
         user_prompt = (
             f"Table: {req.table}\n"
-            f"Columns: {', '.join(req.columns)}\n\n"
-            f"Sample logs (up to 10 rows):\n{sample_str}\n\n"
-            f"Current parser:\n{req.current_query}\n\n"
+            f"Columns: {', '.join(req.columns[:30])}\n\n"
+            f"Sample logs (up to 5 rows):\n{sample_str}\n\n"
+            f"Current parser:\n{parser_text}\n\n"
             f"User instruction: {req.message}"
         )
 
-        try:
-            result = await _llm_complete(_PARSER_CHAT_SYSTEM, user_prompt)
-            obj = _parse_llm_json(result["text"])
-            new_query  = obj.get("parser_query", "").replace("\\n", "\n").strip()
-            explanation = obj.get("explanation", "Updated")
-            answer      = obj.get("answer", "")
-        except Exception as e:
+        new_query = explanation = answer = ""
+        last_err = ""
+        for _attempt in range(2):  # retry once if LLM returns empty
+            try:
+                result = await _llm_complete(_PARSER_CHAT_SYSTEM, user_prompt)
+                obj = _parse_llm_json(result["text"])
+                new_query  = obj.get("parser_query", "").replace("\\n", "\n").strip()
+                explanation = obj.get("explanation", "Updated")
+                answer      = obj.get("answer", "")
+                last_err = ""
+                break
+            except ValueError as e:
+                last_err = str(e)
+                _log.warning("parser-chat attempt %d returned empty/invalid JSON: %s", _attempt + 1, last_err)
+                continue
+            except Exception as e:
+                last_err = str(e)
+                break
+
+        if last_err:
             yield _sse({"type": "step", "label": "Processing your request…", "status": "error",
-                        "detail": str(e)[:200]})
-            yield _sse({"type": "done", "success": False, "error": f"Chat failed: {e}"})
+                        "detail": last_err[:200]})
+            yield _sse({"type": "done", "success": False, "error": f"Chat failed: {last_err}"})
             return
 
         yield _sse({"type": "step", "label": "Processing your request…", "status": "done",
