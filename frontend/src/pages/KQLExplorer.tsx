@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, Fragment } from 'react';
+import { useState, useEffect, useRef, Fragment, useMemo } from 'react';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
     faDatabase, faSpinner, faRefresh, faChevronRight, faChevronDown,
     faSearch, faArrowUp, faArrowDown, faXmark, faRobot,
     faCode, faPlay, faCheckCircle, faTriangleExclamation,
     faCircleInfo, faTable, faPlus, faFilter, faWrench, faClock, faPaperPlane,
+    faFolderOpen,
 } from '@fortawesome/free-solid-svg-icons';
 import { http as axios } from '../api/client';
 
@@ -27,6 +28,7 @@ interface LogResult { columns: string[]; rows: Record<string, unknown>[]; row_co
 interface ColFilter { column: string; value: string; }
 interface ParserStep { label: string; status: 'running' | 'done' | 'error'; detail?: string; }
 interface FnParam { type: string; name: string; defaultValue: string; }
+interface FunctionInfo { id: string; alias: string; displayName: string; category: string; query: string; }
 
 const KQL_TYPES = ['string', 'int', 'long', 'real', 'bool', 'datetime', 'timespan', 'dynamic'];
 
@@ -75,11 +77,22 @@ export default function KQLExplorer() {
     // ── initial parser request ────────────────────────────────────
     const [parserRequest, setParserRequest] = useState('');
 
+    // ── existing parser loaded into editor ────────────────────────
+    const [loadedFromAlias, setLoadedFromAlias] = useState<string | null>(null);
+
     // ── chat ─────────────────────────────────────────────────────
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [chatInput, setChatInput] = useState('');
     const [chatLoading, setChatLoad] = useState(false);
     const chatEndRef = useRef<HTMLDivElement>(null);
+
+    // ── workspace functions panel ─────────────────────────────────
+    const [wsFunctions, setWsFunctions] = useState<FunctionInfo[]>([]);
+    const [fnLoading, setFnLoading] = useState(false);
+    const [fnError, setFnError] = useState<string | null>(null);
+    const [activeSection, setActiveSection] = useState<'tables' | 'functions'>('tables');
+    const [expandedFn, setExpandedFn] = useState<string | null>(null);
+    const [fnSearch, setFnSearch] = useState('');
 
     const toggleRunRow = (i: number) => setExpRunRows(prev => {
         const s = new Set(prev); s.has(i) ? s.delete(i) : s.add(i); return s;
@@ -131,6 +144,17 @@ export default function KQLExplorer() {
         } finally { setTabLoading(false); }
     };
 
+    const loadFunctions = async () => {
+        setFnLoading(true); setFnError(null);
+        try {
+            const r = await axios.get('/api/kql/list-functions', { timeout: 60000 });
+            setWsFunctions(r.data.functions || []);
+        } catch (e: unknown) {
+            const err = e as { response?: { data?: { detail?: string } }; message?: string };
+            setFnError(err?.response?.data?.detail ?? err?.message ?? 'Failed to load functions');
+        } finally { setFnLoading(false); }
+    };
+
     const fetchLogs = async (
         table: string, search: string, filters: ColFilter[], sort: string, desc: boolean,
     ) => {
@@ -162,7 +186,25 @@ export default function KQLExplorer() {
         setSortCol('TimeGenerated'); setSortDesc(true); setExpRows(new Set());
         setImplSucc(null); setImplErr(null);
         setChatMessages([]); setChatInput(''); setParserRequest('');
+        setLoadedFromAlias(null);
+        // Pre-load workspace functions so related-parsers panel is populated
+        if (wsFunctions.length === 0 && !fnLoading) loadFunctions();
         await fetchLogs(name, '', [], 'TimeGenerated', true);
+    };
+
+    const loadExistingParser = (fn: FunctionInfo) => {
+        setParserKQL(fn.query || '');
+        setAlias(fn.alias || '');
+        setNote(`Loaded from workspace function: ${fn.displayName || fn.alias}`);
+        setParserValid(true);
+        setLoadedFromAlias(fn.alias);
+        setParserSteps([]);
+        setRunResult(null);
+        setParserErr(null);
+        setChatMessages([]);
+        setChatInput('');
+        setImplSucc(null);
+        setImplErr(null);
     };
 
     const handleSort = async (col: string) => {
@@ -203,6 +245,7 @@ export default function KQLExplorer() {
         setParserKQL(''); setAlias(''); setNote('');
         setImplSucc(null); setImplErr(null);
         setChatMessages([]); setChatInput('');
+        setLoadedFromAlias(null);
 
         const upsertStep = (label: string, status: ParserStep['status'], detail?: string) =>
             setParserSteps(prev => {
@@ -367,6 +410,11 @@ export default function KQLExplorer() {
                     current_query: parserKQL.slice(0, 6000),
                     message: userMsg,
                     days: TIME_TO_DAYS[timeRange] || 1,
+                    related_parsers: relatedParsers.slice(0, 3).map(fn => ({
+                        alias: fn.alias,
+                        display_name: fn.displayName,
+                        query: fn.query,
+                    })),
                 }),
             });
 
@@ -440,25 +488,96 @@ export default function KQLExplorer() {
         return true;
     });
 
+    const filteredFns = wsFunctions.filter(fn => {
+        if (!fnSearch) return true;
+        const q = fnSearch.toLowerCase();
+        return (fn.displayName?.toLowerCase().includes(q) || fn.alias?.toLowerCase().includes(q) || fn.category?.toLowerCase().includes(q));
+    });
+
+    // Workspace functions whose alias/query are related to the currently expanded table
+    const relatedParsers = useMemo<FunctionInfo[]>(() => {
+        if (!expanded || wsFunctions.length === 0) return [];
+        const lower = expanded.toLowerCase();
+        // strip common separators so "AuditLogs" matches "audit_logs_parser" etc.
+        const stripped = lower.replace(/[_\-\s]/g, '');
+        return wsFunctions.filter(fn => {
+            const alias   = (fn.alias       || '').toLowerCase().replace(/[_\-\s]/g, '');
+            const display = (fn.displayName || '').toLowerCase().replace(/[_\-\s]/g, '');
+            const qStart  = (fn.query       || '').trimStart().toLowerCase();
+            return alias.includes(stripped) || display.includes(stripped) || qStart.startsWith(lower);
+        });
+    }, [expanded, wsFunctions]);
+
     // ── render ────────────────────────────────────────────────────
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
 
             {/* Header */}
             <div className="page-header">
-                <div className="page-title">
-                    <FontAwesomeIcon icon={faDatabase} style={{ marginRight: 10, color: 'var(--pwc-orange)', fontSize: '0.9em' }} />
-                    Log Parser
-                </div>
-                <div className="page-subtitle">
-                    Browse workspace tables, explore logs, and build AI-powered KQL parsers
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                        <div className="page-title">
+                            <FontAwesomeIcon icon={faDatabase} style={{ marginRight: 10, color: 'var(--pwc-orange)', fontSize: '0.9em' }} />
+                            Log Parser
+                        </div>
+                        <div className="page-subtitle">
+                            Browse workspace tables, explore logs, and build AI-powered KQL parsers
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                        <button
+                            onClick={() => setActiveSection('tables')}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 8,
+                                height: 36, fontSize: 12.5, paddingInline: 14, flexShrink: 0,
+                                borderRadius: 8,
+                                border: `1px solid ${activeSection === 'tables' ? 'var(--pwc-orange)' : 'var(--border)'}`,
+                                background: activeSection === 'tables' ? 'var(--pwc-orange-light)' : '#FFFFFF',
+                                cursor: 'pointer',
+                                color: activeSection === 'tables' ? 'var(--pwc-orange)' : 'var(--text-secondary)',
+                                fontWeight: 500,
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                transition: 'all 0.15s',
+                            }}
+                        >
+                            <FontAwesomeIcon icon={faDatabase} style={{ fontSize: 11 }} />
+                            Workspace Tables
+                            {tables.length > 0 && (
+                                <span className="badge badge-muted" style={{ fontSize: 10, marginLeft: 2 }}>{filtered.length}</span>
+                            )}
+                        </button>
+                        <button
+                            onClick={() => {
+                                setActiveSection('functions');
+                                if (wsFunctions.length === 0) loadFunctions();
+                            }}
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: 8,
+                                height: 36, fontSize: 12.5, paddingInline: 14, flexShrink: 0,
+                                borderRadius: 8,
+                                border: `1px solid ${activeSection === 'functions' ? 'var(--pwc-orange)' : 'var(--border)'}`,
+                                background: activeSection === 'functions' ? 'var(--pwc-orange-light)' : '#FFFFFF',
+                                cursor: 'pointer',
+                                color: activeSection === 'functions' ? 'var(--pwc-orange)' : 'var(--text-secondary)',
+                                fontWeight: 500,
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+                                transition: 'all 0.15s',
+                            }}
+                        >
+                            <FontAwesomeIcon icon={faCode} style={{ fontSize: 11 }} />
+                            Workspace Functions
+                            {wsFunctions.length > 0 && (
+                                <span className="badge badge-muted" style={{ fontSize: 10, marginLeft: 2 }}>{wsFunctions.length}</span>
+                            )}
+                        </button>
+                    </div>
                 </div>
             </div>
 
             <div style={{ flex: 1, overflow: 'auto', padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-                {/* Toolbar */}
-                <div style={{
+                {/* Toolbar — tables only */}
+                {activeSection === 'tables' && <div style={{
                     display: 'flex', alignItems: 'center', gap: 10,
                     background: 'linear-gradient(135deg, #FAFAF9 0%, #FFFFFF 100%)',
                     border: '1px solid var(--border)',
@@ -547,10 +666,10 @@ export default function KQLExplorer() {
                         <FontAwesomeIcon icon={faRefresh} spin={tabLoading} style={{ fontSize: 11 }} />
                         Refresh
                     </button>
-                </div>
+                </div>}
 
                 {/* Tables card */}
-                <div className="card" style={{ padding: 0, overflow: 'hidden', flexShrink: 0 }}>
+                {activeSection === 'tables' && <div className="card" style={{ padding: 0, overflow: 'hidden', flexShrink: 0 }}>
 
                     {/* Card header */}
                     <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -641,14 +760,13 @@ export default function KQLExplorer() {
                                         <button
                                             onClick={e => {
                                                 e.stopPropagation();
-                                                // Set both synchronously so the drawer renders immediately
                                                 setExpanded(table.DataType);
                                                 setParserOpen(true);
-                                                // Reset parser state for the new table
                                                 setParserKQL(''); setAlias(''); setNote('');
                                                 setRunResult(null); setImplSucc(null); setImplErr(null);
-                                                setParserErr(null);
-                                                // Load logs in background if switching tables
+                                                setParserErr(null); setLoadedFromAlias(null);
+                                                setParserSteps([]); setChatMessages([]); setChatInput('');
+                                                if (wsFunctions.length === 0 && !fnLoading) loadFunctions();
                                                 if (expanded !== table.DataType) {
                                                     setLogs(null);
                                                     setGlobSearch(''); setColFilters([]);
@@ -843,7 +961,179 @@ export default function KQLExplorer() {
                             </div>
                         );
                     })}
-                </div>
+                </div>}
+
+                {/* ── Workspace Functions card ── */}
+                {activeSection === 'functions' && (
+                    <div className="card" style={{ padding: 0, overflow: 'hidden', flexShrink: 0 }}>
+
+                        {/* Card header */}
+                        <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border)', background: 'var(--bg-elevated)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <FontAwesomeIcon icon={faCode} style={{ fontSize: 11, color: 'var(--text-muted)' }} />
+                            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-primary)' }}>
+                                Workspace Functions
+                            </span>
+                            {!fnLoading && wsFunctions.length > 0 && (
+                                <span className="badge badge-muted" style={{ fontSize: 10 }}>{filteredFns.length}</span>
+                            )}
+                            <div style={{ flex: 1 }} />
+                            {/* Search */}
+                            <div style={{ position: 'relative' }}>
+                                <FontAwesomeIcon icon={faSearch} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', fontSize: 10, color: 'var(--text-muted)', pointerEvents: 'none' }} />
+                                <input
+                                    className="form-input"
+                                    placeholder="Search functions…"
+                                    value={fnSearch}
+                                    onChange={e => setFnSearch(e.target.value)}
+                                    style={{ paddingLeft: 28, height: 28, fontSize: 11.5, width: 180, boxSizing: 'border-box', borderRadius: 6 }}
+                                />
+                            </div>
+                            <button
+                                onClick={loadFunctions}
+                                style={{
+                                    height: 28, fontSize: 11, paddingInline: 10, flexShrink: 0,
+                                    borderRadius: 6, border: '1px solid var(--border)',
+                                    background: '#FFFFFF', cursor: 'pointer', color: 'var(--text-secondary)',
+                                    display: 'flex', alignItems: 'center', gap: 6, fontWeight: 500,
+                                }}
+                            >
+                                <FontAwesomeIcon icon={faRefresh} spin={fnLoading} style={{ fontSize: 10 }} />
+                            </button>
+                        </div>
+
+                        {/* Error */}
+                        {fnError && (
+                            <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--critical)', display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <FontAwesomeIcon icon={faTriangleExclamation} />{fnError}
+                            </div>
+                        )}
+
+                        {/* Loading */}
+                        {fnLoading && (
+                            <div style={{ padding: 32, textAlign: 'center', color: 'var(--text-muted)' }}>
+                                <FontAwesomeIcon icon={faSpinner} spin style={{ fontSize: 20 }} />
+                                <div style={{ marginTop: 8, fontSize: 12 }}>Loading functions…</div>
+                            </div>
+                        )}
+
+                        {/* Empty */}
+                        {!fnLoading && filteredFns.length === 0 && !fnError && (
+                            <div className="empty-state" style={{ padding: 40 }}>
+                                <div className="empty-state-icon">
+                                    <FontAwesomeIcon icon={faCode} style={{ opacity: 0.2, fontSize: 32 }} />
+                                </div>
+                                <div className="empty-state-text">No workspace functions found</div>
+                            </div>
+                        )}
+
+                        {/* Column headings */}
+                        {!fnLoading && filteredFns.length > 0 && (
+                            <div style={{
+                                display: 'flex', alignItems: 'center', gap: 12,
+                                padding: '6px 16px 6px 52px',
+                                borderBottom: '1px solid var(--border)',
+                                background: 'var(--bg-elevated)',
+                            }}>
+                                <span style={{ flex: 1, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)' }}>
+                                    Display Name
+                                </span>
+                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', minWidth: 140, textAlign: 'right' }}>
+                                    Category
+                                </span>
+                                <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text-muted)', minWidth: 120, textAlign: 'right' }}>
+                                    Alias
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Function rows */}
+                        {!fnLoading && filteredFns.map((fn) => {
+                            const isFnExp = expandedFn === fn.id;
+                            return (
+                                <div key={fn.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                    {/* Row header */}
+                                    <div
+                                        onClick={() => setExpandedFn(isFnExp ? null : fn.id)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: 12,
+                                            padding: '10px 16px', cursor: 'pointer',
+                                            borderLeft: isFnExp ? '3px solid var(--pwc-orange)' : '3px solid transparent',
+                                            background: isFnExp ? 'rgba(208,74,2,0.04)' : undefined,
+                                            transition: 'background 0.15s',
+                                        }}
+                                    >
+                                        <FontAwesomeIcon
+                                            icon={isFnExp ? faChevronDown : faChevronRight}
+                                            style={{ fontSize: 10, color: 'var(--text-muted)', width: 12, flexShrink: 0 }}
+                                        />
+                                        <FontAwesomeIcon icon={faCode} style={{ fontSize: 11, color: isFnExp ? 'var(--pwc-orange)' : 'var(--text-muted)', flexShrink: 0 }} />
+                                        <span style={{
+                                            fontSize: 13, fontWeight: isFnExp ? 600 : 400,
+                                            color: 'var(--text-primary)',
+                                            fontFamily: '"JetBrains Mono", Consolas, monospace',
+                                            flex: 1,
+                                        }}>
+                                            {fn.displayName || fn.alias}
+                                        </span>
+                                        <span style={{ minWidth: 140, textAlign: 'right', flexShrink: 0 }}>
+                                            {fn.category && (
+                                                <span className="badge badge-muted" style={{ fontSize: 10 }}>{fn.category}</span>
+                                            )}
+                                        </span>
+                                        <span style={{
+                                            fontSize: 11, color: fn.alias ? 'var(--text-secondary)' : 'var(--text-muted)',
+                                            fontFamily: 'monospace', minWidth: 120, textAlign: 'right',
+                                        }}>
+                                            {fn.alias || 'NA'}
+                                        </span>
+                                    </div>
+
+                                    {/* Expanded details */}
+                                    {isFnExp && (
+                                        <div style={{ padding: '12px 16px 16px 42px', background: 'rgba(0,0,0,0.015)' }}>
+                                            <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                                                {fn.alias && (
+                                                    <span className="badge badge-info" style={{ fontSize: 10 }}>
+                                                        alias: {fn.alias}
+                                                    </span>
+                                                )}
+                                                {fn.category && (
+                                                    <span className="badge badge-muted" style={{ fontSize: 10 }}>
+                                                        {fn.category}
+                                                    </span>
+                                                )}
+                                                {fn.id && (
+                                                    <span className="badge badge-muted" style={{ fontSize: 10, fontFamily: 'monospace' }}>
+                                                        id: {fn.id}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {fn.query ? (
+                                                <pre style={{
+                                                    margin: 0, padding: '12px 14px',
+                                                    background: '#f6f8fa', color: '#24292e',
+                                                    border: '1px solid var(--border)',
+                                                    borderRadius: 6,
+                                                    fontSize: 11,
+                                                    fontFamily: '"JetBrains Mono", Consolas, monospace',
+                                                    whiteSpace: 'pre-wrap',
+                                                    maxHeight: 280, overflow: 'auto',
+                                                    lineHeight: 1.65,
+                                                }}>
+                                                    {fn.query}
+                                                </pre>
+                                            ) : (
+                                                <div style={{ fontSize: 12, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                                    No query body available
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
 
             {/* ── AI Parser right-side drawer ── */}
@@ -909,6 +1199,74 @@ export default function KQLExplorer() {
                             {/* Generate button — only shown before any run has started */}
                             {!creating && parserSteps.length === 0 && !parserKQL && (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                                    {/* ── Related parsers ── */}
+                                    {(fnLoading || relatedParsers.length > 0) && (
+                                        <div style={{ border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden' }}>
+                                            <div style={{
+                                                padding: '9px 14px', background: 'var(--bg-elevated)',
+                                                borderBottom: relatedParsers.length > 0 ? '1px solid var(--border)' : 'none',
+                                                display: 'flex', alignItems: 'center', gap: 8,
+                                            }}>
+                                                <FontAwesomeIcon icon={faFolderOpen} style={{ fontSize: 11, color: 'var(--pwc-orange)' }} />
+                                                <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-primary)', flex: 1 }}>
+                                                    Related Parsers in Workspace
+                                                </span>
+                                                {fnLoading && <FontAwesomeIcon icon={faSpinner} spin style={{ fontSize: 10, color: 'var(--text-muted)' }} />}
+                                                {relatedParsers.length > 0 && (
+                                                    <span className="badge badge-muted" style={{ fontSize: 10 }}>{relatedParsers.length}</span>
+                                                )}
+                                            </div>
+                                            {relatedParsers.map(fn => (
+                                                <div key={fn.id} style={{
+                                                    padding: '10px 14px',
+                                                    borderBottom: '1px solid var(--border)',
+                                                    display: 'flex', flexDirection: 'column', gap: 6,
+                                                }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                                                        <FontAwesomeIcon icon={faCode} style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0 }} />
+                                                        <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'monospace', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                            {fn.displayName || fn.alias}
+                                                        </span>
+                                                        {fn.category && (
+                                                            <span className="badge badge-muted" style={{ fontSize: 9 }}>{fn.category}</span>
+                                                        )}
+                                                    </div>
+                                                    {fn.query && (
+                                                        <pre style={{
+                                                            margin: 0, padding: '6px 10px',
+                                                            background: '#f6f8fa', border: '1px solid var(--border)', borderRadius: 5,
+                                                            fontSize: 10.5, fontFamily: '"JetBrains Mono", Consolas, monospace',
+                                                            whiteSpace: 'pre-wrap', color: '#4b5563', lineHeight: 1.55,
+                                                            maxHeight: 60, overflow: 'hidden',
+                                                        }}>
+                                                            {fn.query.split('\n').slice(0, 3).join('\n')}
+                                                        </pre>
+                                                    )}
+                                                    <div style={{ display: 'flex', gap: 7 }}>
+                                                        <button
+                                                            onClick={() => loadExistingParser(fn)}
+                                                            style={{
+                                                                display: 'flex', alignItems: 'center', gap: 6,
+                                                                padding: '4px 10px', borderRadius: 6,
+                                                                border: '1px solid var(--pwc-orange)',
+                                                                background: 'rgba(208,74,2,0.07)',
+                                                                color: 'var(--pwc-orange)',
+                                                                fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                                                transition: 'background 0.15s',
+                                                            }}
+                                                            onMouseEnter={e => (e.currentTarget.style.background = 'rgba(208,74,2,0.15)')}
+                                                            onMouseLeave={e => (e.currentTarget.style.background = 'rgba(208,74,2,0.07)')}
+                                                        >
+                                                            <FontAwesomeIcon icon={faFolderOpen} style={{ fontSize: 10 }} />
+                                                            Load &amp; Edit
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+
                                     <div style={{ padding: '14px 16px', background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 10, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7 }}>
                                         <FontAwesomeIcon icon={faCircleInfo} style={{ color: 'var(--info)', marginRight: 7 }} />
                                         AI will sample up to <strong>{logs ? Math.min(10, logs.row_count) : 0} rows</strong> from <code style={{ fontFamily: 'monospace' }}>{expanded}</code>, analyse the log structure, generate a KQL parser, run it, and auto-fix any errors — all automatically.
@@ -1077,6 +1435,18 @@ export default function KQLExplorer() {
                                                 alias: <strong>{parserAlias}</strong>
                                             </span>
                                         </div>
+                                        {loadedFromAlias && (
+                                            <div style={{
+                                                display: 'flex', alignItems: 'center', gap: 7,
+                                                padding: '6px 10px', marginBottom: 8,
+                                                background: 'rgba(208,74,2,0.06)',
+                                                border: '1px solid rgba(208,74,2,0.22)',
+                                                borderRadius: 6, fontSize: 11, color: 'var(--pwc-orange)',
+                                            }}>
+                                                <FontAwesomeIcon icon={faFolderOpen} style={{ fontSize: 10 }} />
+                                                Editing existing parser: <strong style={{ fontFamily: 'monospace', marginLeft: 3 }}>{loadedFromAlias}</strong>
+                                            </div>
+                                        )}
                                         <textarea
                                             className="form-textarea mono"
                                             value={parserKQL}

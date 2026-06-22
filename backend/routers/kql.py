@@ -289,6 +289,7 @@ class ParserChatRequest(BaseModel):
     current_query: str
     message: str
     days: int = 1
+    related_parsers: list[dict] = []  # [{alias, display_name, query}]
 
 
 @router.get("/tables")
@@ -673,12 +674,30 @@ async def parser_chat(req: ParserChatRequest):
         if len(parser_text) > 4000:
             parser_text = parser_text[:4000] + "\n// … (truncated for context)"
 
+        # Build related-parsers context so the LLM knows what's already deployed
+        related_context = ""
+        if req.related_parsers:
+            parts = []
+            for p in req.related_parsers[:3]:
+                alias = p.get("alias", "")
+                q = (p.get("query", "") or "")[:1000]
+                if q:
+                    parts.append(f"  alias: {alias}\n{q}")
+            if parts:
+                related_context = (
+                    "OTHER PARSERS ALREADY DEPLOYED IN THIS WORKSPACE FOR THIS TABLE:\n"
+                    + "\n\n".join(parts)
+                    + "\n\nIf the user asks to update or improve one of these, use it as the base "
+                    "and reference it by alias in your explanation.\n\n"
+                )
+
         user_prompt = (
             f"Table: {req.table}\n"
             f"Columns: {', '.join(req.columns[:30])}\n\n"
             f"Sample logs (up to 5 rows):\n{sample_str}\n\n"
             f"Current parser:\n{parser_text}\n\n"
-            f"User instruction: {req.message}"
+            + related_context
+            + f"User instruction: {req.message}"
         )
 
         new_query = explanation = answer = ""
@@ -861,6 +880,7 @@ async def list_workspace_functions():
                 "alias":        s.get("properties", {}).get("functionAlias", ""),
                 "displayName":  s.get("properties", {}).get("displayName", ""),
                 "category":     s.get("properties", {}).get("category", ""),
+                "query":        s.get("properties", {}).get("query", ""),
             }
             for s in all_saved
             if s.get("properties", {}).get("functionAlias")
